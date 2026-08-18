@@ -184,6 +184,7 @@
       addLog(mode === 'local' ? 'Playing against the computer. You are ' + g.sideName(mySide) + '.'
                               : 'Host connected. You are ' + g.sideName(mySide) + '.');
       broadcastView();
+      show('screen-game');
       renderAll();
       afterMove();
     } else {
@@ -210,7 +211,9 @@
   function renderAll() {
     if (!S) return;
     const g = S.game;
-    const view = S.mode === 'p2p-guest' ? S.view : S.state;
+    // render always works on a VIEW for the viewer's seat (guest: host's projection;
+    // local/host: the seat's own projection — same shapes the guest receives)
+    const view = S.mode === 'p2p-guest' ? S.view : S.game.viewFor(S.state, S.mySide);
     if (!view) return;
 
     if (g.css) {
