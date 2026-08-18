@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Parlor — Chess · Checkers · UNO · Poker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♟</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">♟ The Parlor
+    <span class="sub">chess · checkers · UNO · poker — against the computer, or peer-to-peer</span>
+  </div>
+  <div id="conn-pill" class="pill hidden"></div>
+</header>
+
+<main>
+  <!-- ============ MENU ============ -->
+  <section id="screen-menu" class="screen">
+    <h1>Pick a game</h1>
+    <p class="muted">Play against the computer, or link up with a friend peer-to-peer.<br>
+    <span class="fine">Peer-to-peer runs directly between two browsers over WebRTC. You swap two short codes —
+    send them by Bluetooth chat, SMS, or any messenger. (Browsers can't link to each other over Bluetooth
+    itself: Web&nbsp;Bluetooth only reaches BLE gadgets — so WebRTC is the P2P transport, and Bluetooth is
+    just one way to hand over the codes.)</span></p>
+    <div class="cards">
+      <div class="gcard" data-game="chess">
+        <div class="gicon">♞</div><h2>Chess</h2>
+        <p>The old war of kings. Full rules: castling, en&nbsp;passant, promotion, check &amp; mate.</p>
+      </div>
+      <div class="gcard" data-game="checkers">
+        <div class="gicon">⚫</div><h2>Checkers</h2>
+        <p>Classic 8×8 draughts. Forced captures, multi-jumps, and crowning kings.</p>
+      </div>
+      <div class="gcard" data-game="uno">
+        <div class="gicon">🃏</div><h2>UNO</h2>
+        <p>Match the color or the number. Skips, reverses, draw-two, and wilds. Empty your hand to win.</p>
+      </div>
+      <div class="gcard" data-game="poker">
+        <div class="gicon">♠</div><h2>Poker</h2>
+        <p>Texas Hold'em: blinds, betting rounds, side pots, and showdown. Bluff if you dare.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SETUP ============ -->
+  <section id="screen-setup" class="screen hidden">
+    <h1 id="setup-title"></h1>
+    <p id="setup-desc" class="muted"></p>
+    <div id="setup-side" class="side-row hidden"></div>
+    <div class="btn-row">
+      <button id="btn-local" class="btn big">🤖 Play vs Computer</button>
+      <button id="btn-p2p" class="btn big">🔗 Play Peer-to-Peer</button>
+      <button class="btn" data-back="screen-menu">← Back</button>
+    </div>
+  </section>
+
+  <!-- ============ CONNECT ============ -->
+  <section id="screen-connect" class="screen hidden">
+    <h1>Connect peer-to-peer</h1>
+    <p class="muted">No server involved — the two browsers link directly over WebRTC.
+    Swap the two codes by Bluetooth, SMS, or any chat app. Codes are short and expire once used.</p>
+    <div class="tabs">
+      <button id="tab-host" class="tab active">I host</button>
+      <button id="tab-guest" class="tab">I join</button>
+    </div>
+    <div id="host-box">
+      <label for="offer-out">1 · Create a room, then send this <b>room code</b> to your friend:</label>
+      <textarea id="offer-out" readonly spellcheck="false" placeholder="Click “Create room” to generate the code…"></textarea>
+      <div class="btn-row">
+        <button id="btn-create" class="btn">Create room</button>
+        <button id="copy-offer" class="btn" disabled>Copy code</button>
+      </div>
+      <label for="answer-in">2 · Paste their <b>answer code</b> here, then connect:</label>
+      <textarea id="answer-in" spellcheck="false" placeholder="paste answer code…"></textarea>
+      <div class="btn-row"><button id="btn-accept" class="btn" disabled>Connect</button></div>
+    </div>
+    <div id="guest-box" class="hidden">
+      <label for="offer-in">1 · Paste your friend's <b>room code</b> here:</label>
+      <textarea id="offer-in" spellcheck="false" placeholder="paste room code…"></textarea>
+      <div class="btn-row"><button id="btn-join" class="btn">Generate my answer</button></div>
+      <label for="answer-out">2 · Send this <b>answer code</b> back to your friend:</label>
+      <textarea id="answer-out" readonly spellcheck="false" placeholder="waiting…"></textarea>
+      <div class="btn-row"><button id="copy-answer" class="btn" disabled>Copy code</button></div>
+    </div>
+    <p id="connect-status" class="muted"></p>
+    <div class="btn-row"><button class="btn" data-back="screen-setup">← Back</button></div>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="screen-game" class="screen hidden">
+    <div class="game-head">
+      <div>
+        <h1 id="game-title"></h1>
+        <div id="turn-pill" class="pill"></div>
+      </div>
+      <div class="btn-row">
+        <button id="btn-rematch" class="btn">↻ Rematch</button>
+        <button id="btn-leave" class="btn">✕ Leave</button>
+      </div>
+    </div>
+    <div class="game-layout">
+      <div id="board" class="board-area"></div>
+      <aside class="side-panel">
+        <div id="players" class="players"></div>
+        <div class="log-wrap">
+          <h3>Log</h3>
+          <div id="log" class="log"></div>
+        </div>
+        <div id="chat-box" class="hidden">
+          <h3>Chat</h3>
+          <div id="chat-log" class="log"></div>
+          <div class="chat-row">
+            <input id="chat-in" maxlength="200" placeholder="say something…">
+            <button id="chat-send" class="btn">Send</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- ============ RESULT OVERLAY ============ -->
+<div id="overlay" class="overlay hidden">
+  <div class="overlay-card">
+    <h2 id="overlay-title">Game over</h2>
+    <p id="overlay-text"></p>
+    <div class="btn-row">
+      <button id="overlay-primary" class="btn big">↻ Rematch</button>
+      <button id="overlay-menu" class="btn">Menu</button>
+    </div>
+  </div>
+</div>
+
+<script src="p2p.js"></script>
+<script src="games/chess.js"></script>
+<script src="games/checkers.js"></script>
+<script src="games/uno.js"></script>
+<script src="games/poker.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
