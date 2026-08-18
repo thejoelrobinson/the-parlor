@@ -88,7 +88,7 @@
     if (me === null || me >= state.hands.length) return [];
     const hand = state.hands[me];
     if (!hand || hand.length === 0) return [];
-    const top = state.discard[state.discard.length - 1];
+    const top = state.discard ? state.discard[state.discard.length - 1] : state.top;
     const out = [];
     for (let idx = 0; idx < hand.length; idx++) {
       const c = hand[idx];
@@ -171,7 +171,7 @@
   function outcome(state) {
     const empty = state.hands.findIndex((h) => h === null ? false : h.length === 0);
     if (empty >= 0) return { over: true, text: 'Player ' + (empty + 1) + ' wins — empty hand!' };
-    const top = state.discard ? state.discard[state.discard.length - 1] : null;
+    const top = state.discard ? state.discard[state.discard.length - 1] : state.top;
     if (state.hands[state.turn] === null) {
       // hidden view: rely on host-computed flags
       if (!state.canPlayNow && !state.canDrawNow && !state.drew) {
