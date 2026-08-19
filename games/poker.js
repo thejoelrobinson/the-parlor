@@ -539,6 +539,18 @@
     return c;
   }
 
+  /* ghost card for in-flight cards — a small face that travels, then fades */
+  function flyCardEl(card) {
+    const rank = card[0], suit = card[1];
+    const g = document.createElement('span');
+    g.className = 'pkr-flycard' + (suit === 'h' || suit === 'd' ? ' pkr-red' : '');
+    const t = document.createElement('span');
+    t.className = 'fc-mid';
+    t.textContent = rank + SYM[suit];
+    g.appendChild(t);
+    return g;
+  }
+
   function blindTag(i, view) {
     if (view.phase !== 'preflop') return '';
     const sb = view.n === 2 ? view.dealer : (view.dealer + 1) % view.n;
@@ -704,16 +716,9 @@
     table.className = 'pkr-table';
     const seatEls = new Array(view.n);
 
-    const oppRow = document.createElement('div');
-    oppRow.className = 'pkr-seat-row';
-    for (let i = 0; i < view.n; i++) {
-      if (i !== mySeat) {
-        const se = seatEl(view, i, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[i], stackChanged: !(lastStackCnt && lastStackCnt[i] === stackCntArr[i]) });
-        seatEls[i] = se;
-        oppRow.appendChild(se);
-      }
-    }
-    table.appendChild(oppRow);
+    const felt = document.createElement('div');
+    felt.className = 'pkr-felt';
+    table.appendChild(felt);
 
     const mid = document.createElement('div');
     mid.className = 'pkr-mid';
@@ -786,10 +791,29 @@
     pot.appendChild(plbl);
     mid.appendChild(pot);
 
+    /* the deck sits on the felt's lower-left — board cards fly from it */
+    const deck = document.createElement('div');
+    deck.className = 'pkr-deck';
+    for (let k = 0; k < 3; k++) {
+      const b = document.createElement('div');
+      b.className = 'card-back pkr-deckcard';
+      deck.appendChild(b);
+    }
+    felt.appendChild(deck);
     table.appendChild(mid);
-    const meEl = seatEl(view, mySeat, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[mySeat], stackChanged: !(lastStackCnt && lastStackCnt[mySeat] === stackCntArr[mySeat]) });
-    seatEls[mySeat] = meEl;
-    table.appendChild(meEl);
+
+    /* seats ring the table, keyed by offset from my seat so the layout stays
+       stable whatever seat I sit in: 0 = me (bottom), then clockwise
+       1 = left, 2 = top, 3 = right. */
+    for (let i = 0; i < view.n; i++) {
+      const off = (i - mySeat + view.n * 4) % view.n;
+      const pos = document.createElement('div');
+      pos.className = 'pkr-pos pkr-pos' + off;
+      const se = seatEl(view, i, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[i], stackChanged: !(lastStackCnt && lastStackCnt[i] === stackCntArr[i]) });
+      seatEls[i] = pos;
+      pos.appendChild(se);
+      table.appendChild(pos);
+    }
     el.appendChild(table);
 
     /* --- chip flight: chips paid this render fly from the paying seat into the pot --- */
@@ -813,6 +837,41 @@
           setTimeout(() => { if (ch.parentNode) ch.parentNode.removeChild(ch); }, 560);
         });
       }
+    }
+
+    /* --- card flights: board cards fly deck -> slot; on the reveal, exposed
+       hole cards fly from their seats into the middle. Same feature gate as
+       the chip flight; the ghosts ride above the felt and fade out on land. --- */
+    function flyCard(src, dst, node, delay, dur) {
+      const tr = table.getBoundingClientRect();
+      node.style.left = (src.left + src.width / 2 - tr.left) + 'px';
+      node.style.top = (src.top + src.height / 2 - tr.top) + 'px';
+      table.appendChild(node);
+      const dx = dst.left + dst.width / 2 - (src.left + src.width / 2);
+      const dy = dst.top + dst.height / 2 - (src.top + src.height / 2);
+      setTimeout(() => {
+        requestAnimationFrame(() => {
+          node.style.transition = 'transform ' + dur + 's var(--ease-out), opacity .18s ease-out ' + (dur - .2) + 's';
+          node.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(.8)';
+          node.style.opacity = '0';
+        });
+      }, delay * 1000);
+      setTimeout(() => { if (node.parentNode) node.parentNode.removeChild(node); }, (delay + dur + .35) * 1000);
+    }
+    if (canFly() && boardChanged && !dealAll) {
+      const deckRect = deck.getBoundingClientRect();
+      for (let i = lastBoardLen; i < newLen; i++) {
+        flyCard(deckRect, board.children[i].getBoundingClientRect(), flyCardEl(view.board[i]), (i - lastBoardLen) * .07, .36);
+      }
+    }
+    if (canFly() && revealChanged && over && view.result.revealed.length) {
+      const dstRect = board.getBoundingClientRect();
+      view.result.revealed.forEach((r, rIdx) => {
+        const srcRect = seatEls[r.seat].getBoundingClientRect();
+        r.hole.forEach((c, j) => {
+          flyCard(srcRect, dstRect, flyCardEl(c), rIdx * .09 + j * .05, .42);
+        });
+      });
     }
 
     if (opts.interactive && !over && String(view.turn) === String(mySeat)) {
@@ -854,14 +913,22 @@
   /* ---------- css (pkr- prefix) ---------- */
 
   const css = [
-    '.pkr-table{width:min(100%,660px);margin:0 auto;border-radius:26px;padding:16px 14px 18px;position:relative;overflow:hidden;',
-    'background:radial-gradient(130% 150% at 50% -10%, #1e6b43 0%, #16683f 48%, var(--green-deep) 100%);',
-    'border:1px solid #c9c2ae;box-shadow:var(--shadow-md), inset 0 2px 14px rgba(0,0,0,.3)}',
-    '.pkr-seat-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}',
-    '.pkr-seat{background:var(--surface-soft);border:1px solid var(--hair-strong);border-radius:14px;',
-    'padding:8px 10px;min-width:112px;text-align:center;box-shadow:var(--shadow-sm)}',
-    '.pkr-seat.me{margin:0 auto}',
-    '.pkr-seat.active{outline:2px solid #7fd6a4;outline-offset:1px;animation:turn-glow 1.6s ease-in-out infinite}',
+    '.pkr-table{width:min(100%,660px);height:470px;margin:0 auto;border-radius:26px;position:relative;overflow:visible;',
+    'background:radial-gradient(120% 140% at 50% 0%, #24443a 0%, #1b332c 55%, #14271f 100%);',
+    'border:1px solid #c9c2ae;box-shadow:var(--shadow-md)}',
+    '.pkr-felt{position:absolute;left:13%;right:13%;top:14%;bottom:14%;border-radius:50%;',
+    'background:radial-gradient(120% 130% at 50% 22%, #1e6b43 0%, #16683f 52%, var(--green-deep) 100%);',
+    'border:9px solid #5e4327;box-shadow:0 8px 22px rgba(0,0,0,.35), inset 0 0 30px rgba(0,0,0,.4), inset 0 2px 6px rgba(255,255,255,.08)}',
+    '.pkr-pos{position:absolute;z-index:5;display:flex;justify-content:center;transform:translateY(-50%)}',
+    '.pkr-pos .pkr-seat{width:100%;max-width:152px}',
+    '.pkr-pos0{left:50%;bottom:0;top:auto;margin-left:-76px;width:152px;transform:none}',
+    '.pkr-pos1{left:0;top:50%;width:154px}',
+    '.pkr-pos2{left:50%;top:0;margin-left:-76px;width:152px;transform:none}',
+    '.pkr-pos3{right:0;top:50%;width:154px}',
+    '.pkr-seat{background:var(--surface);border:1px solid var(--hair-strong);border-radius:14px;',
+    'padding:8px 10px;min-width:112px;text-align:center;box-shadow:0 3px 10px rgba(0,0,0,.3)}',
+    '.pkr-seat.active{outline:2px solid #ffd97a;outline-offset:2px;animation:pkr-turn-glow 1.6s ease-in-out infinite}',
+    '@keyframes pkr-turn-glow{0%,100%{box-shadow:0 3px 10px rgba(0,0,0,.3), 0 0 0 0 rgba(255,217,122,0)}50%{box-shadow:0 3px 10px rgba(0,0,0,.3), 0 0 0 7px rgba(255,217,122,.25)}}',
     '.pkr-seat.folded{opacity:.55}',
     '.pkr-seat.winner{outline:2px solid var(--gold);outline-offset:1px}',
     '.pkr-seat-head{display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:6px;min-height:18px}',
@@ -895,7 +962,7 @@
     'animation:chip-in .28s var(--ease-out) both}',
     '.pkr-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}',
     '.pkr-tag.pkr-win{color:var(--gold);font-weight:800}',
-    '.pkr-mid{display:flex;flex-direction:column;align-items:center;gap:10px;margin:14px 0}',
+    '.pkr-mid{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:10px;max-width:86%}',
     '.pkr-board{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;perspective:600px}',
     '.pkr-empty{opacity:.25;border-style:dashed;background:rgba(255,255,255,.5)}',
     '.pkr-flip{animation:card-flip .42s var(--ease-spring) both;backface-visibility:hidden}',
@@ -919,6 +986,15 @@
     'repeating-conic-gradient(rgba(255,255,255,.95) 0 18deg, #c29330 18deg 45deg);',
     'color:#fff;font-size:9px;font-weight:800;text-shadow:0 1px 2px rgba(90,60,5,.65);',
     'box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 0 0 1px rgba(0,0,0,.18);pointer-events:none}',
+    '.pkr-deck{position:absolute;left:20%;top:68%;z-index:1}',
+    '.pkr-deckcard{width:40px;height:56px;border-radius:7px}',
+    '.pkr-deckcard:nth-child(2){transform:translate(4px,-3px)}',
+    '.pkr-deckcard:nth-child(3){transform:translate(8px,-6px)}',
+    '.pkr-flycard{position:absolute;left:0;top:0;z-index:60;width:36px;height:52px;margin:-26px 0 0 -18px;border-radius:8px;',
+    'background:#fffdf9;border:1px solid #d8d2c4;box-shadow:0 3px 8px rgba(28,33,30,.35);',
+    'display:flex;align-items:center;justify-content:center;pointer-events:none}',
+    '.pkr-flycard .fc-mid{font-family:var(--font-display);font-weight:700;font-size:16px;color:#20242a}',
+    '.pkr-flycard.pkr-red .fc-mid{color:#8e2f23}',
     '.pkr-seat.win-pop{animation:pkr-win-pop .6s var(--ease-spring) .1s both}',
     '@keyframes pkr-win-pop{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}',
     '.pkr-foldbeat{animation:pkr-foldbeat .4s var(--ease-out) both}',
@@ -934,7 +1010,8 @@
     '.pkr-fold{color:var(--brick);border-color:#e3d0c9}',
     '.pkr-call{color:var(--green-deep);font-weight:700;border-color:#cfe0d3}',
     '.pkr-raise-range{width:130px;accent-color:var(--green);cursor:pointer}',
-    '.pkr-raise-btn{min-width:104px}'
+    '.pkr-raise-btn{min-width:104px}',
+    '@media(max-width:520px){.pkr-table{height:400px}.pkr-mid{transform:translate(-50%,-50%) scale(.78)}.pkr-pos0,.pkr-pos2{width:128px;margin-left:-64px}.pkr-pos1,.pkr-pos3{width:128px}}'
   ].join('\n');
 
   const game = {
