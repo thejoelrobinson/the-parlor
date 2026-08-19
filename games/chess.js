@@ -152,7 +152,7 @@
           for (const dc of [-1, 1]) {
             const cc = c + dc;
             if (cc < 0 || cc > 7) continue;
-            const t = f * 8 + cc;
+            const t = f + dc; // diagonal capture square = forward square ±1 file
             const tp = b[t];
             if (tp && tp.c !== side) {
               if ((t >> 3) === lastRow) {
@@ -437,7 +437,10 @@
         if (s) s.classList.add('sel');
         (targets[s0] || []).forEach((m) => {
           const t = boardEl.querySelector('[data-i="' + m.to + '"]');
-          if (t) t.classList.add('tgt');
+          if (t) {
+            t.classList.add('tgt');
+            if (b[m.to]) t.classList.add('occ'); // occupied enemy target → capture ring
+          }
         });
       }
     }
