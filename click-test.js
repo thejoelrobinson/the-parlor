@@ -94,6 +94,7 @@ class El {
   set innerHTML(v) { this._html = String(v); if (this._html === '') this.children = []; }
   get innerHTML() { return this._html; }
   appendChild(c) { this.children.push(c); c.parentNode = this; return c; }
+  removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) { this.children.splice(i, 1); c.parentNode = null; } return c; }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   removeEventListener(t, fn) { const ls = this.listeners[t]; if (ls) this.listeners[t] = ls.filter((f) => f !== fn); }
   dispatch(t, ev) {
@@ -229,7 +230,15 @@ function clickBoard(gameId) {
   for (const start of own) {
     start.click(); // select
     const tgts = board.querySelectorAll('.' + cls).filter((sq) => sq.classList.contains('tgt'));
-    if (tgts.length) { pick(tgts).click(); return; } // move
+    if (tgts.length) {
+      pick(tgts).click();
+      const bars = boardEl().querySelectorAll('.chess-promo');
+      if (bars.length) {
+        const promoBtns = bars[0].querySelectorAll('.btn');
+        if (promoBtns.length) promoBtns[0].click(); // promotion picker: first = queen (old auto-queen outcome)
+      }
+      return;
+    }
     start.click(); // no targets from this piece — deselect, try the next one
   }
   throw new Error(gameId + ': selecting every own piece produced no targets — tap input dead');

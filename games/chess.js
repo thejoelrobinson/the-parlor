@@ -416,9 +416,11 @@
     const onMove = opts.onMove;
     const b = view.board;
 
-    if (!interactive) el.__sel = -1;
+    if (!interactive) { el.__sel = -1; el.__promo = null; }
     const getSel = () => (typeof el.__sel === 'number' ? el.__sel : -1);
     const sel = getSel();
+    const getPromo = () => (el.__promo && typeof el.__promo === 'object' ? el.__promo : null);
+    const promo = getPromo();
 
     /* --- diff against the previous render's board --- */
     const flip = canFlip();
@@ -487,13 +489,16 @@
       for (const m of moves) (targets[m.from] = targets[m.from] || []).push(m);
     }
 
+    const checked = view.turn ? (inCheck(b, view.turn) ? view.turn : null) : null;
+
     for (let i = 0; i < 64; i++) {
       const r = i >> 3, c = i & 7;
       const sq = document.createElement('div');
       sq.className = 'chess-sq ' + (((r + c) & 1) ? 'dark' : 'light');
       sq.dataset.i = String(i);
-      if (view.last && (view.last.from === i || view.last.to === i)) sq.classList.add('lm');
       const p = b[i];
+      if (view.last && (view.last.from === i || view.last.to === i)) sq.classList.add('lm');
+      if (checked && p && p.p === 'k' && p.c === checked) sq.classList.add('check');
       if (p) {
         const sp = document.createElement('span');
         sp.className = 'chess-pc ' + p.c + (cascade ? ' deal' : landSet[i] ? ' land' : '');
@@ -516,6 +521,29 @@
       boardEl.appendChild(sq);
     }
     el.appendChild(boardEl);
+
+    /* --- promotion picker: a pawn on a last-rank target opens a 4-choice bar --- */
+    if (interactive && promo) {
+      const cands = (targets[promo.from] || []).filter((m) => m.to === promo.to && m.promo);
+      if (cands.length) {
+        const bar = document.createElement('div');
+        bar.className = 'chess-promo';
+        for (const q of ['q', 'r', 'b', 'n']) {
+          const mv = cands.find((m) => m.promo === q);
+          const bt = document.createElement('button');
+          bt.className = 'btn';
+          bt.textContent = GLYPH[mySide][q];
+          bt.addEventListener('click', () => { el.__promo = null; onMove(mv); });
+          bar.appendChild(bt);
+        }
+        const cx = document.createElement('button');
+        cx.className = 'btn';
+        cx.textContent = 'Cancel';
+        cx.addEventListener('click', () => { el.__promo = null; render(view, el, opts); });
+        bar.appendChild(cx);
+        el.appendChild(bar);
+      }
+    }
 
     /* --- FLIP invert + play, and capture ghosts --- */
     if (flip && (glides.length || ghosts.length)) {
@@ -576,6 +604,8 @@
     function paint() {
       const s0 = getSel();
       boardEl.querySelectorAll('.sel,.tgt').forEach((x) => x.classList.remove('sel', 'tgt'));
+      const bar = el.querySelector('.chess-promo');
+      if (bar && !getPromo() && bar.parentNode) bar.parentNode.removeChild(bar);
       if (s0 >= 0) {
         const s = boardEl.querySelector('[data-i="' + s0 + '"]');
         if (s) s.classList.add('sel');
@@ -591,6 +621,7 @@
 
     function onSquare(i) {
       if (!interactive) return;
+      if (el.__promo) el.__promo = null; // any square click dismisses an open picker
       const s0 = getSel();
       const p = b[i];
       const own = !!p && p.c === mySide;
@@ -600,7 +631,12 @@
         const cands = targets[s0].filter((m) => m.to === i);
         if (cands.length) {
           el.__sel = -1;
-          onMove(cands.find((m) => m.promo === 'q') || cands[0]);
+          if (cands.some((m) => m.promo)) {
+            el.__promo = { from: s0, to: i };
+            render(view, el, opts); // rebuild with the picker bar
+            return;
+          }
+          onMove(cands[0]);
           return;
         }
       }
@@ -637,7 +673,7 @@
     '.chess-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
     '.chess-sq.light{background:#f0e9d8}',
     '.chess-sq.dark{background:#5c7263}',
-    '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none}',
+    '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none;transition:transform .14s var(--ease-spring)}',
     '.chess-pc .pc-glyph{display:inline-block;line-height:1}',
     '.chess-pc.white{color:#f7f2e5;text-shadow:-1px 0 0 rgba(28,33,30,.7),1px 0 0 rgba(28,33,30,.7),0 -1px 0 rgba(28,33,30,.7),0 1px 0 rgba(28,33,30,.7),0 2px 4px rgba(28,33,30,.4)}',
     '.chess-pc.black{color:#23282b;text-shadow:0 1px 2px rgba(255,255,255,.35)}',
@@ -647,10 +683,15 @@
     '.chess-sq.own{cursor:pointer}',
     '.chess-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(22,104,63,.45)}',
     '.chess-sq.sel{outline:3px solid #16683f;outline-offset:-3px}',
+    '.chess-sq.sel .chess-pc{transform:scale(1.12)}',
+    '.chess-sq.check{animation:check-pulse 1.1s ease-in-out infinite}',
     '.chess-sq.tgt{cursor:pointer}',
     '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(22,104,63,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
     '.chess-sq.tgt.occ::after{width:86%;height:86%;background:transparent;border:4px solid rgba(22,104,63,.9)}',
-    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}'
+    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}',
+    '.chess-promo{display:flex;justify-content:center;gap:10px;margin-top:14px;animation:entry-in .24s var(--ease-out) both}',
+    '.chess-promo .btn{width:52px;height:58px;padding:0;display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1}',
+    '.chess-promo .btn:last-child{width:auto;padding:0 16px;font-size:14px;font-weight:700;letter-spacing:.04em}'
   ].join('\n');
 
   const game = {
