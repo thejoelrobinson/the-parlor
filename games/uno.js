@@ -287,6 +287,9 @@
    let lastDeckKey = '';    // deckCount:canDraw — fires the reshuffle spin once
    let lastNoteKey = '';    // seat:text:discardCount:counts — one play-note per action
    let lastDeckCount = -1;  // deck count — fires the deck pop when a card is drawn
+   let lastOneArr = null;   // per-seat count===1 — fires the UNO! burst + badge pop once
+   let lastSuitKey = '';    // currentSuit — fires the suit beat on change
+   let lastDirKey = 1;      // play direction — fires the direction spin on flip
 
   function render(view, el, opts) {
     const mySide = opts.mySide;
@@ -304,6 +307,9 @@
     const handChanged = handKey !== lastHandKey;
     const topChanged = topKey !== lastTopKey;
     const countsChanged = countKey !== lastCountKey;
+    const oneArr = view.counts.map((c) => c === 1);
+    const suitChanged = view.currentSuit !== lastSuitKey;
+    const dirChanged = view.dir !== lastDirKey;
 
     el.innerHTML = '';
     const wrap = document.createElement('div');
@@ -321,10 +327,17 @@
       nm.textContent = s === me ? '' : 'P' + (s + 1) + ' · ' + view.counts[s];
       cell.appendChild(nm);
       if (view.counts[s] === 1) {
+        const justOne = !!(lastOneArr && !lastOneArr[s]);
         const badge = document.createElement('span');
-        badge.className = 'uno-one';
+        badge.className = 'uno-one' + (justOne ? ' pop' : '');
         badge.textContent = '1';
         cell.appendChild(badge);
+        if (justOne) {
+          const burst = document.createElement('span');
+          burst.className = 'uno-burst';
+          burst.textContent = 'UNO!';
+          cell.appendChild(burst);
+        }
       }
       const backs = document.createElement('div');
       backs.className = 'uno-backs';
@@ -383,8 +396,8 @@
     const info = document.createElement('div');
     info.className = 'uno-info';
     const dirCcw = view.dir !== 1;
-    info.innerHTML = '<div class="uno-suitrow">Suit: <b class="uno-suit-' + view.currentSuit + '">' + SUITNAME[view.currentSuit] + '</b></div>' +
-      '<div class="uno-dirrow"><span class="uno-dir' + (dirCcw ? ' ccw' : '') + '">' + (dirCcw ? '↺' : '↻') + '</span> ' + (dirCcw ? 'counter' : 'clockwise') + '</div>' +
+    info.innerHTML = '<div class="uno-suitrow">Suit: <b class="uno-suit-' + view.currentSuit + (suitChanged ? ' uno-suitbeat' : '') + '">' + SUITNAME[view.currentSuit] + '</b></div>' +
+      '<div class="uno-dirrow"><span class="uno-dir' + (dirCcw ? ' ccw' : '') + (dirChanged ? ' dirbeat' : '') + '">' + (dirCcw ? '↺' : '↻') + '</span> ' + (dirCcw ? 'counter' : 'clockwise') + '</div>' +
       (view.drew ? '<div class="uno-hint">You drew — play it or pass.</div>' : '');
     mid.appendChild(info);
     wrap.appendChild(mid);
@@ -430,6 +443,12 @@
       if (interactive && pend === idx && c.suit === 'w') ce.classList.add('pend');
       handRow.appendChild(ce);
     });
+    if (myHand.length === 1 && lastOneArr && !lastOneArr[me]) {
+      const burst = document.createElement('div');
+      burst.className = 'uno-burst';
+      burst.textContent = 'UNO!';
+      handRow.appendChild(burst);
+    }
     wrap.appendChild(handRow);
 
     /* actions */
@@ -473,6 +492,9 @@
     lastDeckKey = deckKey;
     lastNoteKey = noteKey;
     lastDeckCount = view.deckCount;
+    lastOneArr = oneArr;
+    lastSuitKey = view.currentSuit;
+    lastDirKey = view.dir;
   }
 
   function renderInfo(view, el, opts) {
@@ -498,6 +520,15 @@
     '.uno-oppcell.active{border-color:#16683f;background:#e9f1ea;box-shadow:inset 0 0 0 1px #16683f;animation:turn-glow 1.6s ease-in-out infinite}',
     '.uno-oppcell.one{border-color:var(--gold);background:var(--gold-soft);box-shadow:inset 0 0 0 1px var(--gold)}',
     '.uno-one{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;background:var(--gold);color:#fff;font-family:var(--font-display);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(28,33,30,.3);animation:pill-pulse .9s ease-in-out infinite}',
+    '.uno-one.pop{animation:uno-badge-pop .45s var(--ease-spring) both, pill-pulse .9s ease-in-out .55s infinite}',
+    '@keyframes uno-badge-pop{0%{transform:scale(0)}60%{transform:scale(1.45)}100%{transform:scale(1)}}',
+    '.uno-burst{position:absolute;top:-16px;left:50%;z-index:9;font-family:var(--font-display);font-weight:900;font-size:22px;color:#a34433;letter-spacing:.05em;text-shadow:0 1px 3px rgba(28,33,30,.35);pointer-events:none;transform:translateX(-50%);animation:uno-burst .9s var(--ease-spring) both}',
+    '@keyframes uno-burst{0%{opacity:0;transform:translateX(-50%) scale(.3) rotate(-14deg)}35%{opacity:1;transform:translateX(-50%) scale(1.35) rotate(6deg)}60%{opacity:1;transform:translateX(-50%) scale(1) rotate(-3deg)}100%{opacity:0;transform:translateX(-50%) scale(1.05) rotate(0)}}',
+    '.uno-suitbeat{display:inline-block;animation:uno-suitbeat .5s var(--ease-spring) both}',
+    '@keyframes uno-suitbeat{0%{transform:scale(1.6);filter:brightness(1.5)}100%{transform:scale(1);filter:brightness(1)}}',
+    '.uno-dir.dirbeat{animation:dir-spin 9s linear infinite, uno-dirbeat .55s var(--ease-spring)}',
+    '.uno-dir.ccw.dirbeat{animation:dir-spin 9s linear infinite reverse, uno-dirbeat .55s var(--ease-spring)}',
+    '@keyframes uno-dirbeat{from{transform:rotate(360deg)}to{transform:rotate(0)}}',
     '.uno-oppname{font-size:12px;font-weight:600;color:#5c6560;letter-spacing:.02em}',
     '.uno-backs{display:flex;gap:3px}',
     '.uno-mid{display:flex;align-items:center;justify-content:center;gap:22px}',
@@ -525,7 +556,7 @@
     '.uno-dir{display:inline-block;font-size:15px;line-height:1;animation:dir-spin 9s linear infinite}',
     '.uno-dir.ccw{animation-direction:reverse}',
     '.uno-suit-r{color:#a34433;font-weight:700}.uno-suit-y{color:#a87c15;font-weight:700}.uno-suit-g{color:#1e5634;font-weight:700}.uno-suit-b{color:#2e4d74;font-weight:700}',
-    '.uno-hand{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-end;min-height:92px;padding-top:16px}',
+    '.uno-hand{position:relative;display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-end;min-height:92px;padding-top:16px}',
     '.uno-hand .uno-card{margin-left:-16px}',
     '.uno-hand .uno-card:first-child{margin-left:0}',
     '.uno-still{animation:none !important}',
