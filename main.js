@@ -108,7 +108,7 @@
       $('#copy-offer').disabled = false;
       setConnectStatus('Room created. Send the room code to your friend, then paste their answer code below.');
     } catch (e) {
-      setConnectStatus('⚠ ' + (e && e.message ? e.message : e));
+      setConnectStatus('✕ ' + (e && e.message ? e.message : e));
     } finally { $('#btn-create').disabled = false; }
   });
 
@@ -120,7 +120,7 @@
       await P2P.acceptAnswer($('#answer-in').value);
       setConnectStatus('Connected! Starting the game…');
     } catch (e) {
-      setConnectStatus('⚠ That answer code doesn\'t look right. ' + (e && e.message ? e.message : e));
+      setConnectStatus('✕ That answer code doesn\'t look right. ' + (e && e.message ? e.message : e));
     }
   });
 
@@ -133,7 +133,7 @@
       $('#copy-answer').disabled = false;
       setConnectStatus('Send the answer code back to your friend. Waiting for the connection…');
     } catch (e) {
-      setConnectStatus('⚠ That room code doesn\'t look right. ' + (e && e.message ? e.message : e));
+      setConnectStatus('✕ That room code doesn\'t look right. ' + (e && e.message ? e.message : e));
     } finally { $('#btn-join').disabled = false; }
   });
 
@@ -148,8 +148,8 @@
     }
   };
   P2P.onFail = (msg) => {
-    if (S) { setConn(null); addLog('⚠ ' + msg); }
-    else setConnectStatus('⚠ ' + msg);
+    if (S) { setConn(null); addLog('✕ ' + msg); }
+    else setConnectStatus('✕ ' + msg);
   };
 
   /* ================= sessions ================= */
@@ -188,7 +188,9 @@
       renderAll();
       afterMove();
     } else {
-      $('#turn-pill').textContent = '⏳ Waiting for the host to deal…';
+      const dealPill = $('#turn-pill');
+      dealPill.textContent = 'Waiting for the host to deal';
+      dealPill.className = 'pill wait';
       show('screen-game');
     }
   }
@@ -197,8 +199,9 @@
     const pill = $('#conn-pill');
     if (!mode) { pill.classList.add('hidden'); return; }
     pill.classList.remove('hidden');
-    pill.textContent = mode === 'local' ? '🤖 vs Computer'
-                     : mode === 'p2p-host' ? '🔗 P2P · Host' : '🔗 P2P · Guest';
+    pill.className = mode === 'local' ? 'pill cpu' : 'pill p2p';
+    pill.textContent = mode === 'local' ? 'vs Computer'
+                     : mode === 'p2p-host' ? 'P2P · Host' : 'P2P · Guest';
   }
 
   function broadcastView() {
@@ -229,12 +232,12 @@
     const side = g.currentSide(view);
     const over = g.outcome(view).over;
     const pill = $('#turn-pill');
-    if (over) { pill.textContent = '🏁 Finished'; pill.className = 'pill'; }
-    else if (side === S.mySide) { pill.textContent = '🎯 Your turn'; pill.className = 'pill mine'; }
+    if (over) { pill.textContent = 'Finished'; pill.className = 'pill'; }
+    else if (side === S.mySide) { pill.textContent = 'Your turn'; pill.className = 'pill mine'; }
     // trailing "…" left off: .pill.wait::after appends animated dots
-    else if (S.mode === 'local') { pill.textContent = '🤖 Computer is thinking'; pill.className = 'pill wait'; }
-    else if (S.mode === 'p2p-host') { pill.textContent = '⏳ Waiting for your opponent'; pill.className = 'pill wait'; }
-    else { pill.textContent = '⏳ Waiting for the host'; pill.className = 'pill wait'; }
+    else if (S.mode === 'local') { pill.textContent = 'Computer is thinking'; pill.className = 'pill wait'; }
+    else if (S.mode === 'p2p-host') { pill.textContent = 'Waiting for your opponent'; pill.className = 'pill wait'; }
+    else { pill.textContent = 'Waiting for the host'; pill.className = 'pill wait'; }
 
     g.render(view, $('#board'), {
       mySide: S.mySide,
@@ -321,7 +324,14 @@
   };
 
   /* ---------- results / rematch / leave ---------- */
-  const RESULT_ICON = { chess: '\u265e', checkers: '\u265f', uno: '\U0001F0CF', poker: '\u2660' };
+  /* Result icons reuse the menu-card motif marks (editorial ink, no emoji):
+     the serif glyph, the disc pair, the four-ink dots. */
+  const RESULT_ICON = {
+    chess: '<span class="gicon-glyph">\u265e</span>',
+    checkers: '<span class="gicon-discs"><i></i><i></i></span>',
+    uno: '<span class="gicon-dots"><i></i><i></i><i></i><i></i></span>',
+    poker: '<span class="gicon-glyph">\u2660</span>'
+  };
 
   function reducedMotion() {
     try {
@@ -336,7 +346,7 @@
     if (reducedMotion()) return;
     const probe = document.createElement('span');
     if (typeof probe.style !== 'object') return;
-    const palette = ['#0f9d58', '#c29330', '#c7513f', '#2f6fd6', '#f0c419'];
+    const palette = ['#16683f', '#c29330', '#b04a33', '#2a466e', '#e6d9b8'];
     for (let i = 0; i < 28; i++) {
       const s = document.createElement('span');
       s.className = 'confetti';
@@ -364,8 +374,9 @@
   function showResult(text, g) {
     const iconEl = $('#overlay-icon');
     if (iconEl) {
-      iconEl.textContent = RESULT_ICON[g.id] || '';
-      iconEl.classList.toggle('hidden', !iconEl.textContent);
+      const icon = RESULT_ICON[g.id] || '';
+      iconEl.innerHTML = icon;
+      iconEl.classList.toggle('hidden', !icon);
     }
     const fxEl = $('#overlay-fx');
     if (fxEl) {

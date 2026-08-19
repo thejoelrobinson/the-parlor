@@ -3,8 +3,8 @@
 Four classic games in your browser — **Chess, Checkers, UNO, and Poker (Texas Hold'em)** —
 with no installs, no accounts, and no server:
 
-- **🤖 vs Computer** — play any game against a built-in AI opponent.
-- **🔗 Peer-to-Peer** — two browsers link **directly** with WebRTC (no game server).
+- **vs Computer** — play any game against a built-in AI opponent.
+- **Peer-to-Peer** — two browsers link **directly** with WebRTC (no game server).
   You swap two short codes, then play with in-game chat.
 
 ## Run it
@@ -23,7 +23,7 @@ then visit `http://localhost:8000`.
 
 ## Playing peer-to-peer
 
-1. Both players pick the **same game**, then choose **🔗 Play Peer-to-Peer**.
+1. Both players pick the **same game**, then choose **Play Peer-to-Peer**.
 2. One taps **I host** → **Create room** → copies the *room code*.
 3. The other taps **I join** → pastes the room code → **Generate my answer** →
    copies the *answer code* back.
