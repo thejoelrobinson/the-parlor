@@ -496,6 +496,8 @@
   let lastBoardKey = '', lastHoleKey = '', lastRevealKey = '';
   let lastBoardLen = 0, lastPotKey = '', lastBets = null;
   let lastPhaseKey = '', lastFolded = null;
+  let lastStackCnt = null; // per-seat chip count — piles re-drop only when the size changes
+  let lastPotCnt = -1;     // pot chip count — pot pile re-drops when it grows/shrinks
 
   function motionOff() {
     try {
@@ -507,6 +509,34 @@
     if (typeof window.requestAnimationFrame !== 'function') return false;
     if (motionOff()) return false;
     return typeof document.createElement('div').getBoundingClientRect === 'function';
+  }
+
+  /* Chip piles: deterministic count + color from stack size (no randomness in
+     render paths). Same thresholds for count and color, so a color change
+     always coincides with a count change. */
+  function chipCount(n) {
+    if (n <= 0) return 0;
+    if (n >= 180) return 6;
+    if (n >= 120) return 5;
+    if (n >= 70) return 4;
+    if (n >= 35) return 3;
+    if (n >= 12) return 2;
+    return 1;
+  }
+
+  function stackColor(n) {
+    if (n >= 180) return '#c29330'; // gold
+    if (n >= 120) return '#2e5f8a'; // blue
+    if (n >= 70) return '#a34433';  // red
+    if (n >= 35) return '#16683f';  // green
+    return '#efece2';               // white
+  }
+
+  function chipEl(color, cls) {
+    const c = document.createElement('span');
+    c.className = 'pkr-chip' + (cls ? ' ' + cls : '');
+    if (c.style && c.style.setProperty) c.style.setProperty('--chip', color);
+    return c;
   }
 
   function blindTag(i, view) {
@@ -588,14 +618,40 @@
 
     const meta = document.createElement('div');
     meta.className = 'pkr-seat-meta';
+    const cnt = flags.stackCnt || 0;
+    if (cnt > 0) {
+      const pile = document.createElement('span');
+      pile.className = 'pkr-pile' + (flags.stackChanged ? ' pkr-pile-in' : ' pkr-still');
+      const col = stackColor(p.stack);
+      for (let k = 0; k < cnt; k++) {
+        const ch = chipEl(col);
+        if (flags.stackChanged && ch.style && ch.style.setProperty) {
+          ch.style.setProperty('animation-delay', ((cnt - 1 - k) * .045) + 's');
+        }
+        pile.appendChild(ch);
+      }
+      meta.appendChild(pile);
+    }
     const stack = document.createElement('span');
     stack.className = 'pkr-stack';
     stack.textContent = p.stack;
     meta.appendChild(stack);
     if (p.bet > 0) {
+      const betSame = !!(lastBets && lastBets[i] === p.bet);
       const chip = document.createElement('span');
-      chip.className = 'pkr-bet' + (lastBets && lastBets[i] === p.bet ? ' pkr-still' : '');
-      chip.textContent = p.bet;
+      chip.className = 'pkr-bet' + (betSame ? ' pkr-still' : '');
+      const bp = document.createElement('span');
+      bp.className = 'pkr-pile pkr-pile-mini' + (betSame ? ' pkr-still' : ' pkr-pile-in');
+      const bcnt = p.bet >= 90 ? 3 : p.bet >= 35 ? 2 : 1;
+      for (let k = 0; k < bcnt; k++) {
+        const ch = chipEl('#a34433', 'mini');
+        if (!betSame && ch.style && ch.style.setProperty) {
+          ch.style.setProperty('animation-delay', ((bcnt - 1 - k) * .04) + 's');
+        }
+        bp.appendChild(ch);
+      }
+      chip.appendChild(bp);
+      chip.appendChild(document.createTextNode(String(p.bet)));
       meta.appendChild(chip);
     }
     if (p.folded) {
@@ -636,6 +692,8 @@
     const potKey = String(view.pot);
     const betsArr = view.players.map((p) => p.bet);
     const foldedArr = view.players.map((p) => p.folded);
+    const stackCntArr = view.players.map((p) => chipCount(p.stack));
+    const potCnt = chipCount(view.pot);
     const flights = canFly()
       ? view.players.map((p, i) => ({ i: i, paid: p.bet - (lastBets ? lastBets[i] : 0) })).filter((f) => f.paid > 0)
       : [];
@@ -650,7 +708,7 @@
     oppRow.className = 'pkr-seat-row';
     for (let i = 0; i < view.n; i++) {
       if (i !== mySeat) {
-        const se = seatEl(view, i, opts, { holeChanged, revealChanged });
+        const se = seatEl(view, i, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[i], stackChanged: !(lastStackCnt && lastStackCnt[i] === stackCntArr[i]) });
         seatEls[i] = se;
         oppRow.appendChild(se);
       }
@@ -700,13 +758,28 @@
 
     const pot = document.createElement('div');
     pot.className = 'pkr-pot';
-    const disc = document.createElement('span');
-    disc.className = 'pkr-pot-disc' + (potKey !== lastPotKey ? ' pkr-pot-pop' : '');
+    const potPile = document.createElement('div');
+    potPile.className = 'pkr-potpile pkr-pile'
+      + (potKey !== lastPotKey ? ' pkr-pot-pop' : '')
+      + (potCnt !== lastPotCnt ? ' pkr-pile-in' : ' pkr-still');
+    if (view.pot > 0) {
+      for (let k = 0; k < potCnt; k++) {
+        const ch = chipEl('#c29330', 'big');
+        if (potCnt !== lastPotCnt && ch.style && ch.style.setProperty) {
+          ch.style.setProperty('animation-delay', ((potCnt - 1 - k) * .045) + 's');
+        }
+        potPile.appendChild(ch);
+      }
+    } else {
+      const ring = document.createElement('span');
+      ring.className = 'pkr-pot-empty';
+      potPile.appendChild(ring);
+    }
+    pot.appendChild(potPile);
     const num = document.createElement('span');
     num.className = 'pkr-pot-num';
     num.textContent = view.pot;
-    disc.appendChild(num);
-    pot.appendChild(disc);
+    pot.appendChild(num);
     const plbl = document.createElement('span');
     plbl.className = 'pkr-pot-lbl';
     plbl.textContent = 'pot';
@@ -714,7 +787,7 @@
     mid.appendChild(pot);
 
     table.appendChild(mid);
-    const meEl = seatEl(view, mySeat, opts, { holeChanged, revealChanged });
+    const meEl = seatEl(view, mySeat, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[mySeat], stackChanged: !(lastStackCnt && lastStackCnt[mySeat] === stackCntArr[mySeat]) });
     seatEls[mySeat] = meEl;
     table.appendChild(meEl);
     el.appendChild(table);
@@ -722,7 +795,7 @@
     /* --- chip flight: chips paid this render fly from the paying seat into the pot --- */
     if (flights.length) {
       const tr = table.getBoundingClientRect();
-      const dr = disc.getBoundingClientRect();
+      const dr = potPile.getBoundingClientRect();
       for (const f of flights) {
         const sr = seatEls[f.i].getBoundingClientRect();
         const ch = document.createElement('span');
@@ -749,6 +822,7 @@
     lastBoardKey = boardKey; lastHoleKey = holeKey; lastRevealKey = revealKey;
     lastBoardLen = newLen; lastPotKey = potKey; lastBets = betsArr;
     lastPhaseKey = view.phase; lastFolded = foldedArr;
+    lastStackCnt = stackCntArr; lastPotCnt = potCnt;
   }
 
   function renderInfo(view, el, opts) {
@@ -801,9 +875,24 @@
     '.pkr-dim{opacity:.4;transform:scale(.92)}',
     '.pkr-seat-meta{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;min-height:18px}',
     '.pkr-stack{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--ink)}',
-    '.pkr-bet{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:18px;padding:0 6px;border-radius:9px;',
-    'background:radial-gradient(120% 140% at 30% 20%, #d4a83f, #a87c15 78%);color:#fff;font-size:11px;font-weight:800;',
-    'box-shadow:0 1px 3px rgba(28,33,30,.3), inset 0 0 0 1px rgba(255,255,255,.28);animation:chip-in .28s var(--ease-out) both}',
+    '.pkr-chip{position:relative;display:inline-block;width:18px;height:18px;flex:none;border-radius:50%;',
+    'background:radial-gradient(circle, var(--chip,#c29330) 0 42%, rgba(255,255,255,.92) 42% 47%, rgba(0,0,0,.14) 47% 49%, transparent 49%),',
+    'repeating-conic-gradient(rgba(255,255,255,.95) 0 18deg, var(--chip,#c29330) 18deg 45deg);',
+    'box-shadow:0 1px 2px rgba(0,0,0,.4), inset 0 0 0 1px rgba(0,0,0,.18)}',
+    '.pkr-chip.big{width:22px;height:22px}',
+    '.pkr-chip.mini{width:12px;height:12px}',
+    '.pkr-pile{display:inline-flex;flex-direction:column;align-items:center;justify-content:flex-end}',
+    '.pkr-pile .pkr-chip{margin-top:-13px}',
+    '.pkr-pile .pkr-chip:first-child{margin-top:0}',
+    '.pkr-pile .pkr-chip.big{margin-top:-16px}',
+    '.pkr-pile .pkr-chip.big:first-child{margin-top:0}',
+    '.pkr-pile .pkr-chip.mini{margin-top:-8px}',
+    '.pkr-pile .pkr-chip.mini:first-child{margin-top:0}',
+    '.pkr-pile.pkr-still .pkr-chip{animation:none}',
+    '.pkr-pile-in .pkr-chip{animation:pkr-chip-drop .3s var(--ease-spring) both}',
+    '@keyframes pkr-chip-drop{from{opacity:0;transform:translateY(-9px) scale(.5)}to{opacity:1;transform:translateY(0) scale(1)}}',
+    '.pkr-bet{display:inline-flex;align-items:center;gap:4px;min-width:26px;min-height:18px;font-size:12px;font-weight:800;color:var(--ink);',
+    'animation:chip-in .28s var(--ease-out) both}',
     '.pkr-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}',
     '.pkr-tag.pkr-win{color:var(--gold);font-weight:800}',
     '.pkr-mid{display:flex;flex-direction:column;align-items:center;gap:10px;margin:14px 0}',
@@ -812,22 +901,24 @@
     '.pkr-flip{animation:card-flip .42s var(--ease-spring) both;backface-visibility:hidden}',
     '.pkr-still{animation:none !important}',
     '.pkr-pot{display:flex;flex-direction:column;align-items:center;gap:3px}',
-    '.pkr-pot-disc{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;',
-    'background:radial-gradient(120% 140% at 32% 22%, #d8ad4b, #a87c15 78%);',
-    'box-shadow:0 2px 6px rgba(0,0,0,.35), inset 0 0 0 2px rgba(255,255,255,.3), inset 0 0 0 5px rgba(120,85,15,.55)}',
-    '.pkr-pot-num{color:#fff;font-family:var(--font-display);font-weight:700;font-size:14px;text-shadow:0 1px 2px rgba(90,60,5,.5)}',
+    '.pkr-potpile{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-height:24px}',
+    '.pkr-pot-empty{width:22px;height:22px;border-radius:50%;border:2px dashed rgba(255,255,255,.3)}',
+    '.pkr-pot-num{color:#fff;font-family:var(--font-display);font-weight:700;font-size:13px;background:rgba(0,0,0,.34);',
+    'border-radius:9px;padding:1px 9px;text-shadow:0 1px 2px rgba(0,0,0,.45)}',
     '.pkr-pot-lbl{font-size:9px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
-    '.pkr-pot-disc.pkr-pot-pop{animation:pot-pop .32s var(--ease-spring) both}',
+    '.pkr-potpile.pkr-pot-pop{animation:pot-pop .32s var(--ease-spring) both}',
     '.pkr-phase{font-size:10px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.85);',
     'background:rgba(0,0,0,.28);border-radius:8px;padding:3px 10px;animation:pkr-phase-in .3s var(--ease-out) both}',
     '.pkr-result{font-family:var(--font-display);font-weight:700;font-size:clamp(15px,3.4vw,19px);color:#fff;',
     'text-shadow:0 1px 4px rgba(0,0,0,.4);max-width:100%;text-align:center;animation:pkr-result-in .5s var(--ease-spring) both}',
     '@keyframes pkr-phase-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
     '@keyframes pkr-result-in{0%{opacity:0;transform:scale(1.35)}60%{opacity:1;transform:scale(.97)}100%{opacity:1;transform:scale(1)}}',
-    '.pkr-fly{position:absolute;left:0;top:0;z-index:60;display:inline-flex;align-items:center;justify-content:center;',
-    'min-width:24px;height:24px;padding:0 6px;border-radius:12px;',
-    'background:radial-gradient(120% 140% at 30% 20%, #d4a83f, #a87c15 78%);color:#fff;font-size:11px;font-weight:800;',
-    'box-shadow:0 2px 5px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.28);pointer-events:none}',
+    '.pkr-fly{position:absolute;left:0;top:0;z-index:60;display:flex;align-items:center;justify-content:center;',
+    'width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;',
+    'background:radial-gradient(circle, #c29330 0 42%, rgba(255,255,255,.92) 42% 47%, rgba(0,0,0,.14) 47% 49%, transparent 49%),',
+    'repeating-conic-gradient(rgba(255,255,255,.95) 0 18deg, #c29330 18deg 45deg);',
+    'color:#fff;font-size:9px;font-weight:800;text-shadow:0 1px 2px rgba(90,60,5,.65);',
+    'box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 0 0 1px rgba(0,0,0,.18);pointer-events:none}',
     '.pkr-seat.win-pop{animation:pkr-win-pop .6s var(--ease-spring) .1s both}',
     '@keyframes pkr-win-pop{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}',
     '.pkr-foldbeat{animation:pkr-foldbeat .4s var(--ease-out) both}',
