@@ -16,6 +16,11 @@
   const enemy = (c) => (c === 'red' ? 'black' : 'red');
   const nm = (i) => FILES[i & 7] + (8 - (i >> 3));
 
+  function lastChip(last) {
+    if (!last) return '';
+    return (last.side === 'red' ? 'Red' : 'Black') + ' ' + nm(last.from) + (last.cap ? '×' : '–') + nm(last.to);
+  }
+
   function startBoard() {
     const b = new Array(64).fill(null);
     for (let r = 0; r < 8; r++) {
@@ -132,7 +137,10 @@
   }
 
   function viewFor(state, side) {
-    return JSON.parse(JSON.stringify(state));
+    const v = JSON.parse(JSON.stringify(state));
+    const o = outcome(state);
+    if (o.over) v.over = o.text; // additive public field: both peers see the same view
+    return v;
   }
 
   /* ---------- AI: alpha-beta, depth 6 (captures continue inside the search) ---------- */
@@ -205,6 +213,8 @@
      pieces, fade captured ones as ghosts, and pop the landing piece.
      Feature-detected so the Node click-test stub skips the effect entirely. */
   let prevBoard = null;
+  let lastChipKey = null; // last-move chip (incl. jump badge): replays only when it changes
+  let lastLmKey = null;   // lm-square flash: replays only when the last-move pair changes
 
   function motionOff() {
     try {
@@ -302,6 +312,19 @@
     }
 
     el.innerHTML = '';
+
+    /* --- last-move chip (with keep-jumping badge) --- */
+    const jumping = view.jumpFrom >= 0;
+    const text = lastChip(view.last) + (jumping ? '  ·  jump again' : '');
+    const chipChanged = text !== lastChipKey;
+    const lmKey = view.last ? (view.last.from + ':' + view.last.to + ':' + (view.last.cap ? 1 : 0)) : '';
+    const lmChanged = lmKey !== lastLmKey;
+    const chipEl = document.createElement('div');
+    chipEl.className = 'chk-last' + (chipChanged ? '' : ' still') + (jumping ? ' jump' : '');
+    chipEl.textContent = text;
+    el.appendChild(chipEl);
+
+    /* --- board --- */
     const boardEl = document.createElement('div');
     boardEl.className = 'chk-board';
 
@@ -317,13 +340,17 @@
       const sq = document.createElement('div');
       sq.className = 'chk-sq ' + (dark ? 'dark' : 'light');
       sq.dataset.i = String(i);
-      if (view.last && (view.last.from === i || view.last.to === i)) sq.classList.add('lm');
+      if (view.last && (view.last.from === i || view.last.to === i)) {
+        sq.classList.add('lm');
+        if (lmChanged) sq.classList.add('lm-new');
+      }
       const p = b[i];
       if (p) {
         const wrap = document.createElement('span');
         wrap.className = 'chk-wrap' + (cascade ? ' deal' : '');
         const pc = makeDisc(p);
         if (landSet[i]) pc.classList.add('land');
+        if (!cascade && landSet[i] && p.king && prevBoard && prevBoard[i] && !prevBoard[i].king) pc.classList.add('crowned');
         wrap.appendChild(pc);
         if (cascade) wrap.style.animationDelay = (i * 3) + 'ms';
         sq.appendChild(wrap);
@@ -337,6 +364,19 @@
       boardEl.appendChild(sq);
     }
     el.appendChild(boardEl);
+
+    /* --- game-over stamp --- */
+    if (view.over) {
+      const draw = view.over.indexOf('Draw') === 0;
+      const red = view.over.indexOf('Red wins') === 0;
+      const st = document.createElement('div');
+      st.className = 'chk-over' + (draw ? '' : red ? ' red' : ' black');
+      const word = document.createElement('span');
+      word.className = 'chk-overword';
+      word.textContent = draw ? 'Draw' : red ? 'Red wins' : 'Black wins';
+      st.appendChild(word);
+      boardEl.appendChild(st);
+    }
 
     /* --- FLIP invert + play, and capture ghosts --- */
     if (flip && (glides.length || ghosts.length)) {
@@ -389,6 +429,8 @@
     }
 
     prevBoard = b;
+    lastChipKey = text;
+    lastLmKey = lmKey;
 
     function paint() {
       const s0 = getSel();
@@ -465,11 +507,26 @@
     '.chk-pc.ghost{position:absolute;display:flex;align-items:center;justify-content:center;opacity:.95;box-shadow:0 1px 5px rgba(0,0,0,.4)}',
     '.chk-sq.own{cursor:pointer}',
     '.chk-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(22,104,63,.45)}',
+    '.chk-sq.own:hover .chk-wrap{transform:translateY(-3px) scale(1.04)}',
     '.chk-sq.sel{outline:3px solid #16683f;outline-offset:-3px}',
     '.chk-sq.sel .chk-wrap{transform:scale(1.08)}',
     '.chk-sq.tgt{cursor:pointer}',
     '.chk-sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(22,104,63,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
-    '.chk-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}'
+    '.chk-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}',
+    '.chk-sq.lm.lm-new{animation:chk-lm-flash .5s var(--ease-out) both}',
+    '@keyframes chk-lm-flash{0%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}45%{box-shadow:inset 0 0 0 4px rgba(194,147,48,1)}100%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}}',
+    '.chk-pc.crowned .crown{animation:chk-crown .7s var(--ease-spring) .05s both}',
+    '@keyframes chk-crown{0%{transform:scale(0) rotate(-30deg);opacity:0}60%{transform:scale(1.5) rotate(8deg);opacity:1}100%{transform:scale(1) rotate(0)}}',
+    '.chk-last{width:min(92vw,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chk-last-in .3s var(--ease-out) both}',
+    '.chk-last.still{animation:none}',
+    '.chk-last.jump{border-color:var(--gold);animation:chk-last-in .3s var(--ease-out) both,chk-jump-pulse 1.4s ease-in-out .3s infinite}',
+    '@keyframes chk-last-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}',
+    '@keyframes chk-jump-pulse{0%,100%{box-shadow:var(--shadow-sm)}50%{box-shadow:0 0 0 4px rgba(194,147,48,.30)}}',
+    '.chk-over{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;pointer-events:none;background:rgba(245,243,237,.45)}',
+    '.chk-overword{font-family:var(--font-display);font-weight:700;font-size:clamp(26px,7vw,44px);letter-spacing:.04em;color:var(--gold);text-shadow:0 2px 12px rgba(28,33,30,.28);animation:chk-stamp .55s var(--ease-spring) both}',
+    '.chk-over.red .chk-overword{color:#a34433}',
+    '.chk-over.black .chk-overword{color:#2e4d74}',
+    '@keyframes chk-stamp{0%{opacity:0;transform:scale(1.7) rotate(-14deg)}60%{opacity:1;transform:scale(.96) rotate(-5deg)}100%{opacity:1;transform:scale(1) rotate(-7deg)}}'
   ].join('\n');
 
   const game = {
