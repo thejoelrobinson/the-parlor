@@ -224,6 +224,15 @@
 
   function nm(i) { return FILES[i & 7] + (8 - (i >> 3)); }
 
+  function lastChip(last) {
+    if (!last) return '';
+    if (last.castle) return last.castle === 'K' ? 'O-O' : 'O-O-O';
+    let t = GLYPH[last.piece.c][last.piece.p] + ' ' + nm(last.from) +
+      ((last.captured || last.ep) ? '×' : '–') + nm(last.to);
+    if (last.promo) t += '=' + GLYPH[last.piece.c][last.promo];
+    return t;
+  }
+
   function applyMove(state, m) {
     const b = state.board;
     const side = state.turn;
@@ -308,7 +317,10 @@
   }
 
   function viewFor(state, side) {
-    return JSON.parse(JSON.stringify(state));
+    const v = JSON.parse(JSON.stringify(state));
+    const o = outcome(state);
+    if (o.over) v.over = o.text; // additive public field: both peers see the same view
+    return v;
   }
 
   /* ---------- AI: minimax + alpha-beta, depth 3, MVV-LVA ordering ---------- */
@@ -393,6 +405,8 @@
      so the Node click-test stub (no layout, no rAF) simply skips the effect.
      Animation state never touches state or moves — the JSON contract holds. */
   let prevBoard = null;
+  let lastTextKey = null; // last-move chip: replays only when the move actually changes
+  let lastLmKey = null;   // lm-square flash: replays only when the last-move pair changes
 
   function motionOff() {
     try {
@@ -480,6 +494,18 @@
     }
 
     el.innerHTML = '';
+
+    /* --- last-move notation chip --- */
+    const text = lastChip(view.last);
+    const textChanged = text !== lastTextKey;
+    const lmKey = view.last ? (view.last.from + ':' + view.last.to + ':' + (view.last.promo || '')) : '';
+    const lmChanged = lmKey !== lastLmKey;
+    const chipEl = document.createElement('div');
+    chipEl.className = 'chess-last' + (textChanged ? '' : ' still');
+    chipEl.textContent = text;
+    el.appendChild(chipEl);
+
+    /* --- board --- */
     const boardEl = document.createElement('div');
     boardEl.className = 'chess-board';
 
@@ -497,7 +523,10 @@
       sq.className = 'chess-sq ' + (((r + c) & 1) ? 'dark' : 'light');
       sq.dataset.i = String(i);
       const p = b[i];
-      if (view.last && (view.last.from === i || view.last.to === i)) sq.classList.add('lm');
+      if (view.last && (view.last.from === i || view.last.to === i)) {
+        sq.classList.add('lm');
+        if (lmChanged) sq.classList.add('lm-new');
+      }
       if (checked && p && p.p === 'k' && p.c === checked) sq.classList.add('check');
       if (p) {
         const sp = document.createElement('span');
@@ -521,6 +550,18 @@
       boardEl.appendChild(sq);
     }
     el.appendChild(boardEl);
+
+    /* --- game-over stamp --- */
+    if (view.over) {
+      const mate = view.over.indexOf('Checkmate') === 0;
+      const st = document.createElement('div');
+      st.className = 'chess-over' + (mate ? ' mate' : '');
+      const word = document.createElement('span');
+      word.className = 'chess-overword';
+      word.textContent = mate ? 'Checkmate' : view.over.indexOf('Stalemate') === 0 ? 'Stalemate' : 'Draw';
+      st.appendChild(word);
+      boardEl.appendChild(st);
+    }
 
     /* --- promotion picker: a pawn on a last-rank target opens a 4-choice bar --- */
     if (interactive && promo) {
@@ -600,6 +641,8 @@
     }
 
     prevBoard = b;
+    lastTextKey = text;
+    lastLmKey = lmKey;
 
     function paint() {
       const s0 = getSel();
@@ -682,6 +725,7 @@
     '.chess-pc.ghost{position:absolute;display:flex;align-items:center;justify-content:center;opacity:.95}',
     '.chess-sq.own{cursor:pointer}',
     '.chess-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(22,104,63,.45)}',
+    '.chess-sq.own:hover .chess-pc{transform:translateY(-3px) scale(1.06)}',
     '.chess-sq.sel{outline:3px solid #16683f;outline-offset:-3px}',
     '.chess-sq.sel .chess-pc{transform:scale(1.12)}',
     '.chess-sq.check{animation:check-pulse 1.1s ease-in-out infinite}',
@@ -689,9 +733,18 @@
     '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(22,104,63,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
     '.chess-sq.tgt.occ::after{width:86%;height:86%;background:transparent;border:4px solid rgba(22,104,63,.9)}',
     '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}',
+    '.chess-sq.lm.lm-new{animation:chess-lm-flash .5s var(--ease-out) both}',
+    '@keyframes chess-lm-flash{0%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}45%{box-shadow:inset 0 0 0 4px rgba(194,147,48,1)}100%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}}',
     '.chess-promo{display:flex;justify-content:center;gap:10px;margin-top:14px;animation:entry-in .24s var(--ease-out) both}',
     '.chess-promo .btn{width:52px;height:58px;padding:0;display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1}',
-    '.chess-promo .btn:last-child{width:auto;padding:0 16px;font-size:14px;font-weight:700;letter-spacing:.04em}'
+    '.chess-promo .btn:last-child{width:auto;padding:0 16px;font-size:14px;font-weight:700;letter-spacing:.04em}',
+    '.chess-last{width:min(92vw,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chess-last-in .3s var(--ease-out) both}',
+    '.chess-last.still{animation:none}',
+    '@keyframes chess-last-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}',
+    '.chess-over{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;pointer-events:none;background:rgba(245,243,237,.45)}',
+    '.chess-overword{font-family:var(--font-display);font-weight:700;font-size:clamp(26px,7vw,44px);letter-spacing:.04em;color:var(--gold);text-shadow:0 2px 12px rgba(28,33,30,.28);animation:chess-stamp .55s var(--ease-spring) both}',
+    '.chess-over.mate .chess-overword{color:var(--brick)}',
+    '@keyframes chess-stamp{0%{opacity:0;transform:scale(1.7) rotate(-14deg)}60%{opacity:1;transform:scale(.96) rotate(-5deg)}100%{opacity:1;transform:scale(1) rotate(-7deg)}}'
   ].join('\n');
 
   const game = {
