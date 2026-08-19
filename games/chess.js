@@ -372,7 +372,16 @@
 
   /* ---------- render ---------- */
 
-  const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+  /* Per-color glyph sets: white = hollow set U+2654-U+2659, black = filled set
+   * U+265A-U+265F. Tinting a single filled set via CSS color to fake the white
+   * side is unreliable: on some systems a code point (notably the pawn) resolves
+   * to an emoji/color font that paints it a fixed black. The hollow set has a
+   * genuine white pawn (U+2659), so each side uses its own glyphs and the CSS
+   * color only refines the tint. */
+  const GLYPH = {
+    white: { k: '\u2654', q: '\u2655', r: '\u2656', b: '\u2657', n: '\u2658', p: '\u2659' },
+    black: { k: '\u265a', q: '\u265b', r: '\u265c', b: '\u265d', n: '\u265e', p: '\u265f' }
+  };
 
   function render(view, el, opts) {
     const mySide = opts.mySide;
@@ -404,7 +413,7 @@
       if (p) {
         const sp = document.createElement('span');
         sp.className = 'chess-pc ' + p.c;
-        sp.textContent = GLYPH[p.p];
+        sp.textContent = GLYPH[p.c][p.p];
         sq.appendChild(sp);
       }
       if (interactive) {
@@ -482,7 +491,7 @@
     '.chess-sq.light{background:#f0e9d8}',
     '.chess-sq.dark{background:#5c7263}',
     '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none;animation:pc-settle .18s var(--ease-out) both}',
-    '.chess-pc.white{color:#fbfaf5;text-shadow:0 1px 2px rgba(0,0,0,.55), 0 0 2px rgba(0,0,0,.35)}',
+    '.chess-pc.white{color:#fdfdfb;text-shadow:-1px 0 0 rgba(28,33,30,.7),1px 0 0 rgba(28,33,30,.7),0 -1px 0 rgba(28,33,30,.7),0 1px 0 rgba(28,33,30,.7),0 2px 4px rgba(28,33,30,.4)}',
     '.chess-pc.black{color:#1f2528;text-shadow:0 1px 2px rgba(255,255,255,.35)}',
     '.chess-sq.own{cursor:pointer}',
     '.chess-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(15,157,88,.45)}',
