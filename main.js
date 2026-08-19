@@ -184,6 +184,7 @@
       addLog(mode === 'local' ? 'Playing against the computer. You are ' + g.sideName(mySide) + '.'
                               : 'Host connected. You are ' + g.sideName(mySide) + '.');
       broadcastView();
+      show('screen-game');
       renderAll();
       afterMove();
     } else {
@@ -210,7 +211,9 @@
   function renderAll() {
     if (!S) return;
     const g = S.game;
-    const view = S.mode === 'p2p-guest' ? S.view : S.state;
+    // render always works on a VIEW for the viewer's seat (guest: host's projection;
+    // local/host: the seat's own projection — same shapes the guest receives)
+    const view = S.mode === 'p2p-guest' ? S.view : S.game.viewFor(S.state, S.mySide);
     if (!view) return;
 
     if (g.css) {
@@ -228,9 +231,10 @@
     const pill = $('#turn-pill');
     if (over) { pill.textContent = '🏁 Finished'; pill.className = 'pill'; }
     else if (side === S.mySide) { pill.textContent = '🎯 Your turn'; pill.className = 'pill mine'; }
-    else if (S.mode === 'local') { pill.textContent = '🤖 Computer is thinking…'; pill.className = 'pill wait'; }
-    else if (S.mode === 'p2p-host') { pill.textContent = '⏳ Waiting for your opponent…'; pill.className = 'pill wait'; }
-    else { pill.textContent = '⏳ Waiting for the host…'; pill.className = 'pill wait'; }
+    // trailing "…" left off: .pill.wait::after appends animated dots
+    else if (S.mode === 'local') { pill.textContent = '🤖 Computer is thinking'; pill.className = 'pill wait'; }
+    else if (S.mode === 'p2p-host') { pill.textContent = '⏳ Waiting for your opponent'; pill.className = 'pill wait'; }
+    else { pill.textContent = '⏳ Waiting for the host'; pill.className = 'pill wait'; }
 
     g.render(view, $('#board'), {
       mySide: S.mySide,
@@ -317,7 +321,57 @@
   };
 
   /* ---------- results / rematch / leave ---------- */
+  const RESULT_ICON = { chess: '\u265e', checkers: '\u265f', uno: '\U0001F0CF', poker: '\u2660' };
+
+  function reducedMotion() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+
+  /* Confetti lives inside .overlay-card (overflow:hidden), so it can never
+     escape the card. Skipped under reduced motion, and guarded for the Node
+     click-test stub whose elements have no style object. */
+  function confettiBurst(hostEl) {
+    if (reducedMotion()) return;
+    const probe = document.createElement('span');
+    if (typeof probe.style !== 'object') return;
+    const palette = ['#0f9d58', '#c29330', '#c7513f', '#2f6fd6', '#f0c419'];
+    for (let i = 0; i < 28; i++) {
+      const s = document.createElement('span');
+      s.className = 'confetti';
+      s.style.background = palette[i % palette.length];
+      s.style.left = (4 + Math.random() * 92) + '%';
+      if (i % 3 === 0) { s.style.width = '11px'; s.style.height = '6px'; } // wide slivers mixed in
+      s.style.setProperty('--cx', ((Math.random() * 2 - 1) * 60) + 'px');
+      s.style.setProperty('--cy', (160 + Math.random() * 160) + 'px');
+      s.style.setProperty('--cr0', (Math.random() * 360) + 'deg');
+      s.style.setProperty('--cr', (180 + Math.random() * 540) + 'deg');
+      s.style.setProperty('--cd', (0.9 + Math.random() * 0.7) + 's');
+      s.style.setProperty('--cdel', (Math.random() * 0.25) + 's');
+      hostEl.appendChild(s);
+      s.addEventListener('animationend', function () {
+        if (s.parentNode) s.parentNode.removeChild(s);
+      }, { once: true });
+    }
+    setTimeout(function () { // fallback sweep in case animationend never fires
+      hostEl.querySelectorAll('.confetti').forEach(function (s) {
+        if (s.parentNode) s.parentNode.removeChild(s);
+      });
+    }, 2200);
+  }
+
   function showResult(text, g) {
+    const iconEl = $('#overlay-icon');
+    if (iconEl) {
+      iconEl.textContent = RESULT_ICON[g.id] || '';
+      iconEl.classList.toggle('hidden', !iconEl.textContent);
+    }
+    const fxEl = $('#overlay-fx');
+    if (fxEl) {
+      fxEl.innerHTML = '';
+      if (g.id !== 'poker') confettiBurst(fxEl); // poker hands end constantly: icon only
+    }
     $('#overlay-title').textContent = g.id === 'poker' ? 'Hand over' : 'Game over';
     $('#overlay-text').textContent = text;
     const primary = $('#overlay-primary');

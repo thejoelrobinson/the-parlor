@@ -477,13 +477,31 @@
     return bar;
   }
 
+  /* One-shot deal animations: same closure-key guard as UNO — each area only
+     re-animates when its contents actually changed (a new board card, the
+     hole deal, the reveal). Everything else gets .still (animation:none),
+     so re-renders never replay the card-deal stagger. */
+  let lastBoardKey = '', lastHoleKey = '', lastRevealKey = '';
+
   function render(view, el, opts) {
-    el.innerHTML = '';
     const mySeat = parseInt(opts.mySide, 10);
     const over = !!view.result;
 
+    const ckey = (c) => c[0] + c[1];
+    const me = view.players[mySeat];
+    const boardKey = view.board.map(ckey).join(',');
+    const holeKey = (me && me.hole && !me.folded) ? me.hole.map(ckey).join(',') : '';
+    const revealKey = (over && view.result.revealed)
+      ? view.result.revealed.map((r) => String(r.seat) + r.hole.map(ckey).join('')).join('|')
+      : '';
+    const boardChanged = boardKey !== lastBoardKey;
+    const holeChanged = holeKey !== lastHoleKey;
+    const revealChanged = revealKey !== lastRevealKey;
+
+    el.innerHTML = '';
+
     const board = document.createElement('div');
-    board.className = 'pkr-board';
+    board.className = 'pkr-board' + (boardChanged ? '' : ' still');
     for (let i = 0; i < 5; i++) {
       if (i < view.board.length) board.appendChild(cardEl(view.board[i]));
       else {
@@ -499,17 +517,16 @@
     pot.textContent = 'Pot: ' + view.pot;
     el.appendChild(pot);
 
-    const me = view.players[mySeat];
     if (me && me.hole && !me.folded) {
       const row = document.createElement('div');
-      row.className = 'pkr-hole';
+      row.className = 'pkr-hole' + (holeChanged ? '' : ' still');
       me.hole.forEach((c) => row.appendChild(cardEl(c)));
       el.appendChild(row);
     }
 
     if (over && view.result.revealed) {
       const row = document.createElement('div');
-      row.className = 'pkr-reveal';
+      row.className = 'pkr-reveal' + (revealChanged ? '' : ' still');
       for (const r of view.result.revealed) {
         const lbl = document.createElement('span');
         lbl.className = 'pkr-reveal-lbl';
@@ -523,6 +540,8 @@
     if (opts.interactive && !over && String(view.turn) === String(mySeat)) {
       el.appendChild(actionBar(view, opts));
     }
+
+    lastBoardKey = boardKey; lastHoleKey = holeKey; lastRevealKey = revealKey;
   }
 
   function renderInfo(view, el, opts) {
@@ -554,18 +573,26 @@
   /* ---------- css (pkr- prefix) ---------- */
 
   const css = [
-    '.pkr-board{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:6px 0 12px}',
-    '.pkr-empty{opacity:.25;border-style:dashed}',
+    '.pkr-board{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:8px 0 14px}',
+    '.pkr-empty{opacity:.3;border-style:dashed;background:#fbfaf7}',
     '.pkr-red .cf-corner,.pkr-red .cf-mid{color:#c0392b}',
-    '.pkr-pot{text-align:center;font-weight:700;letter-spacing:.04em;margin-bottom:10px}',
-    '.pkr-hole{display:flex;gap:8px;justify-content:center;margin-bottom:12px}',
-    '.pkr-reveal{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;margin:10px 0}',
-    '.pkr-reveal-lbl{margin-left:12px;font-size:13px;color:var(--muted,#98a2b3)}',
-    '.pkr-actions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:14px;padding-top:12px;border-top:1px dashed rgba(127,127,127,.35)}',
-    '.pkr-actions .btn{border-radius:8px}',
-    '.pkr-fold{color:#e74c3c}',
-    '.pkr-call{color:#2ecc71;font-weight:700}',
-    '.pkr-raise-input{width:74px;padding:6px 8px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font:inherit;text-align:center}'
+    '.pkr-pot{text-align:center;font-weight:800;letter-spacing:.05em;margin-bottom:12px;color:#1c211e;font-size:15px}',
+    '.pkr-hole{display:flex;gap:10px;justify-content:center;margin-bottom:14px}',
+    '.pkr-reveal{display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin:12px 0}',
+    '.pkr-reveal-lbl{margin-left:14px;font-size:13px;font-weight:600;color:#79817a}',
+    '.pkr-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:16px;padding-top:14px;border-top:1px dashed #d3cdbd}',
+    '.pkr-actions .btn{border-radius:10px}',
+    '.pkr-fold{color:#c7513f;border-color:#e3c2ba}',
+    '.pkr-call{color:#0a7a44;font-weight:800;border-color:#bfe3cf}',
+    '.pkr-raise-input{width:78px;padding:8px 10px;border-radius:10px;border:1px solid #d3cdbd;background:#fbfaf7;color:inherit;font:inherit;text-align:center}',
+    '.pkr-board .card-face:nth-child(2){animation-delay:.05s}',
+    '.pkr-board .card-face:nth-child(3){animation-delay:.1s}',
+    '.pkr-board .card-face:nth-child(4){animation-delay:.15s}',
+    '.pkr-board .card-face:nth-child(5){animation-delay:.2s}',
+    '.pkr-hole .card-face:nth-child(2){animation-delay:.06s}',
+    '.pkr-board.still .card-face{animation:none}',
+    '.pkr-hole.still .card-face{animation:none}',
+    '.pkr-reveal.still .card-face{animation:none}'
   ].join('\n');
 
   const game = {

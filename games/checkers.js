@@ -199,6 +199,41 @@
 
   /* ---------- render ---------- */
 
+  /* ---------- FLIP board transition ----------
+     Same technique as chess: snapshot the previous render's board, read the
+     old square rects while the old DOM is still live, then glide the moved
+     pieces, fade captured ones as ghosts, and pop the landing piece.
+     Feature-detected so the Node click-test stub skips the effect entirely. */
+  let prevBoard = null;
+
+  function motionOff() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+
+  function canFlip() {
+    if (typeof window.requestAnimationFrame !== 'function') return false;
+    if (motionOff()) return false;
+    return typeof document.createElement('div').getBoundingClientRect === 'function';
+  }
+
+  function pieceSame(a, c) {
+    return !!a && !!c && a.c === c.c && !!a.king === !!c.king;
+  }
+
+  function makeDisc(piece) {
+    const pc = document.createElement('div');
+    pc.className = 'chk-pc ' + piece.c;
+    if (piece.king) {
+      const cr = document.createElement('span');
+      cr.className = 'crown';
+      cr.textContent = '♛';
+      pc.appendChild(cr);
+    }
+    return pc;
+  }
+
   function render(view, el, opts) {
     const mySide = opts.mySide;
     const interactive = !!opts.interactive;
@@ -206,7 +241,65 @@
     const b = view.board;
 
     if (!interactive) el.__sel = -1;
-    const sel = el.__sel || -1;
+    const getSel = () => (typeof el.__sel === 'number' ? el.__sel : -1);
+    const sel = getSel();
+
+    /* --- diff against the previous render's board --- */
+    const flip = canFlip();
+    const glides = [], ghosts = [];
+    const landSet = {};
+    let cascade = false;
+    if (flip && b.length === 64) {
+      if (!prevBoard) {
+        cascade = true; // first paint: deal the board in
+      } else {
+        let changed = 0;
+        for (let i = 0; i < 64; i++) if (!pieceSame(prevBoard[i], b[i])) changed++;
+        if (changed > 4) {
+          cascade = true; // board reset (rematch)
+        } else if (changed > 0) {
+          const froms = [], tos = [];
+          for (let i = 0; i < 64; i++) {
+            if (prevBoard[i] && !b[i]) froms.push(i);
+            else if (!prevBoard[i] && b[i]) tos.push(i);
+          }
+          const used = {};
+          for (const to of tos) { // pair moved pieces by identity (a jump = 1 pair)
+            for (let f = 0; f < froms.length; f++) {
+              if (used[f]) continue;
+              if (pieceSame(prevBoard[froms[f]], b[to])) {
+                glides.push({ from: froms[f], to: to });
+                used[f] = true;
+                break;
+              }
+            }
+          }
+          for (let f = 0; f < froms.length; f++) { // unpaired = captured
+            if (!used[f]) ghosts.push({ i: froms[f], piece: prevBoard[froms[f]] });
+          }
+          for (const g of glides) landSet[g.to] = true;
+          for (let i = 0; i < 64; i++) { // crowning: piece swapped in place
+            if (prevBoard[i] && b[i] && !pieceSame(prevBoard[i], b[i])) landSet[i] = true;
+          }
+        }
+      }
+    }
+
+    /* --- capture old square rects while the old board is still in the DOM --- */
+    const oldRects = {};
+    if (flip && (glides.length || ghosts.length)) {
+      const oldBoard = el.querySelector('.chk-board');
+      if (oldBoard) {
+        for (const g of glides) {
+          const s = oldBoard.querySelector('[data-i="' + g.from + '"]');
+          if (s) oldRects['f' + g.from] = s.getBoundingClientRect();
+        }
+        for (const g of ghosts) {
+          const s = oldBoard.querySelector('[data-i="' + g.i + '"]');
+          if (s) oldRects['g' + g.i] = s.getBoundingClientRect();
+        }
+      }
+    }
 
     el.innerHTML = '';
     const boardEl = document.createElement('div');
@@ -227,15 +320,13 @@
       if (view.last && (view.last.from === i || view.last.to === i)) sq.classList.add('lm');
       const p = b[i];
       if (p) {
-        const pc = document.createElement('div');
-        pc.className = 'chk-pc ' + p.c;
-        if (p.king) {
-          const cr = document.createElement('span');
-          cr.className = 'crown';
-          cr.textContent = '♛';
-          pc.appendChild(cr);
-        }
-        sq.appendChild(pc);
+        const wrap = document.createElement('span');
+        wrap.className = 'chk-wrap' + (cascade ? ' deal' : '');
+        const pc = makeDisc(p);
+        if (landSet[i]) pc.classList.add('land');
+        wrap.appendChild(pc);
+        if (cascade) wrap.style.animationDelay = (i * 3) + 'ms';
+        sq.appendChild(wrap);
       }
       if (interactive && dark) {
         if (p && p.c === mySide) sq.classList.add('own');
@@ -247,12 +338,65 @@
     }
     el.appendChild(boardEl);
 
+    /* --- FLIP invert + play, and capture ghosts --- */
+    if (flip && (glides.length || ghosts.length)) {
+      const boardRect = boardEl.getBoundingClientRect();
+      for (const g of glides) {
+        const r0 = oldRects['f' + g.from];
+        const fromSq = boardEl.querySelector('[data-i="' + g.from + '"]');
+        const toSq = boardEl.querySelector('[data-i="' + g.to + '"]');
+        const wrap = toSq ? toSq.querySelector('.chk-wrap') : null;
+        if (!r0 || !fromSq || !wrap) continue;
+        const r1 = fromSq.getBoundingClientRect();
+        const dx = r1.left - r0.left, dy = r1.top - r0.top;
+        if (!dx && !dy) continue;
+        wrap.style.zIndex = '30';
+        wrap.style.transition = 'none';
+        wrap.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        void wrap.offsetWidth; // commit the inverted position before animating
+        wrap.style.transition = 'transform .18s cubic-bezier(.2,.75,.3,1.08)';
+        wrap.style.transform = 'translate(0,0)';
+        wrap.addEventListener('transitionend', function done() {
+          wrap.style.transition = ''; wrap.style.transform = ''; wrap.style.zIndex = '';
+          wrap.removeEventListener('transitionend', done);
+        });
+      }
+      for (const g of ghosts) {
+        const r0 = oldRects['g' + g.i];
+        const sq = boardEl.querySelector('[data-i="' + g.i + '"]');
+        if (!r0 || !sq) continue;
+        const r1 = sq.getBoundingClientRect();
+        const gh = makeDisc(g.piece);
+        gh.classList.add('ghost');
+        gh.style.left = (r1.left - boardRect.left) + 'px';
+        gh.style.top = (r1.top - boardRect.top) + 'px';
+        gh.style.width = r1.width + 'px';
+        gh.style.height = r1.height + 'px';
+        gh.style.zIndex = '20';
+        boardEl.appendChild(gh);
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            gh.style.transition = 'opacity .22s ease .08s, transform .22s ease .08s';
+            gh.style.opacity = '0';
+            gh.style.transform = 'scale(.55)';
+            gh.addEventListener('transitionend', function () {
+              if (gh.parentNode) gh.parentNode.removeChild(gh);
+            }, { once: true });
+          });
+        });
+        window.setTimeout(function () { if (gh.parentNode) gh.parentNode.removeChild(gh); }, 900);
+      }
+    }
+
+    prevBoard = b;
+
     function paint() {
+      const s0 = getSel();
       boardEl.querySelectorAll('.sel,.tgt').forEach((x) => x.classList.remove('sel', 'tgt'));
-      if (sel >= 0) {
-        const s = boardEl.querySelector('[data-i="' + sel + '"]');
+      if (s0 >= 0) {
+        const s = boardEl.querySelector('[data-i="' + s0 + '"]');
         if (s) s.classList.add('sel');
-        (targets[sel] || []).forEach((m) => {
+        (targets[s0] || []).forEach((m) => {
           const t = boardEl.querySelector('[data-i="' + m.to + '"]');
           if (t) t.classList.add('tgt');
         });
@@ -261,12 +405,13 @@
 
     function onSquare(i) {
       if (!interactive) return;
+      const s0 = getSel();
       const p = b[i];
       const own = !!p && p.c === mySide;
-      if (sel === i) { el.__sel = -1; paint(); return; }
+      if (s0 === i) { el.__sel = -1; paint(); return; }
       if (own) { el.__sel = i; paint(); return; }
-      if (sel >= 0 && targets[sel]) {
-        const cands = targets[sel].filter((m) => m.to === i);
+      if (s0 >= 0 && targets[s0]) {
+        const cands = targets[s0].filter((m) => m.to === i);
         if (cands.length) { el.__sel = -1; onMove(cands[0]); return; }
       }
       el.__sel = -1;
@@ -306,19 +451,24 @@
   }
 
   const css = [
-    '.chk-board{display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,520px);margin:0 auto;border:3px solid #232936;border-radius:8px;overflow:hidden}',
+    '.chk-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
     '.chk-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
-    '.chk-sq.light{background:#252b3a}',
-    '.chk-sq.dark{background:#7a5a40}',
-    '.chk-pc{width:72%;height:72%;border-radius:50%;box-shadow:0 2px 5px rgba(0,0,0,.55), inset 0 -4px 8px rgba(0,0,0,.35);pointer-events:none}',
-    '.chk-pc.red{background:radial-gradient(circle at 35% 30%, #f08074, #c0392b 72%)}',
-    '.chk-pc.black{background:radial-gradient(circle at 35% 30%, #4d5a70, #10141c 72%)}',
-    '.chk-pc .crown{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ffd75e;font-size:clamp(12px,3.2vw,22px);text-shadow:0 1px 2px #000}',
+    '.chk-sq.light{background:#f0e9d8}',
+    '.chk-sq.dark{background:#6d4f3d}',
+    '.chk-wrap{width:74%;height:74%;position:relative;pointer-events:none}',
+    '.chk-wrap.deal{animation:pc-deal .3s var(--ease-out) both}',
+    '.chk-pc{width:100%;height:100%;border-radius:50%;box-shadow:0 3px 6px rgba(0,0,0,.4), inset 0 -5px 9px rgba(0,0,0,.3), inset 0 3px 6px rgba(255,255,255,.22);pointer-events:none}',
+    '.chk-pc.land{animation:pc-land .34s var(--ease-spring) .1s both}',
+    '.chk-pc.red{background:radial-gradient(circle at 35% 30%, #ef7a67, #b83a2b 74%)}',
+    '.chk-pc.black{background:radial-gradient(circle at 35% 30%, #4a5866, #14191f 74%)}',
+    '.chk-pc .crown{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#f2c14e;font-size:clamp(12px,3.2vw,24px);text-shadow:0 1px 3px rgba(0,0,0,.7)}',
+    '.chk-pc.ghost{position:absolute;display:flex;align-items:center;justify-content:center;opacity:.95;box-shadow:0 1px 5px rgba(0,0,0,.4)}',
     '.chk-sq.own{cursor:pointer}',
-    '.chk-sq.sel{outline:3px solid #f5c518;outline-offset:-3px}',
+    '.chk-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(15,157,88,.45)}',
+    '.chk-sq.sel{outline:3px solid #0f9d58;outline-offset:-3px}',
     '.chk-sq.tgt{cursor:pointer}',
-    '.chk-sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(245,197,24,.85);pointer-events:none}',
-    '.chk-sq.lm{box-shadow:inset 0 0 0 3px rgba(96,165,250,.6)}'
+    '.chk-sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(15,157,88,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
+    '.chk-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}'
   ].join('\n');
 
   const game = {

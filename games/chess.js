@@ -152,7 +152,7 @@
           for (const dc of [-1, 1]) {
             const cc = c + dc;
             if (cc < 0 || cc > 7) continue;
-            const t = f * 8 + cc;
+            const t = f + dc; // diagonal capture square = forward square ±1 file
             const tp = b[t];
             if (tp && tp.c !== side) {
               if ((t >> 3) === lastRow) {
@@ -372,7 +372,43 @@
 
   /* ---------- render ---------- */
 
-  const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+  /* Per-color glyph sets: white = hollow set U+2654-U+2659, black = filled set
+   * U+265A-U+265F. Tinting a single filled set via CSS color to fake the white
+   * side is unreliable: on some systems a code point (notably the pawn) resolves
+   * to an emoji/color font that paints it a fixed black. The hollow set has a
+   * genuine white pawn (U+2659), so each side uses its own glyphs and the CSS
+   * color only refines the tint. */
+  const GLYPH = {
+    white: { k: '\u2654', q: '\u2655', r: '\u2656', b: '\u2657', n: '\u2658', p: '\u2659' },
+    black: { k: '\u265a', q: '\u265b', r: '\u265c', b: '\u265d', n: '\u265e', p: '\u265f' }
+  };
+
+  /* ---------- FLIP board transition ----------
+     render() rebuilds the whole board every call, so to make pieces *glide*
+     across the board instead of teleporting we snapshot the previous
+     render's board in this closure and read the old square rects while the
+     old DOM is still live (FLIP: First, Last, Invert, Play). Only a single
+     legal move (1–4 changed squares) animates; a larger diff (board reset)
+     plays a staggered cascade instead. The layout reads are feature-detected
+     so the Node click-test stub (no layout, no rAF) simply skips the effect.
+     Animation state never touches state or moves — the JSON contract holds. */
+  let prevBoard = null;
+
+  function motionOff() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+
+  function canFlip() {
+    if (typeof window.requestAnimationFrame !== 'function') return false;
+    if (motionOff()) return false;
+    return typeof document.createElement('div').getBoundingClientRect === 'function';
+  }
+
+  function pieceSame(a, c) {
+    return !!a && !!c && a.p === c.p && a.c === c.c;
+  }
 
   function render(view, el, opts) {
     const mySide = opts.mySide;
@@ -381,7 +417,65 @@
     const b = view.board;
 
     if (!interactive) el.__sel = -1;
-    const sel = el.__sel || -1;
+    const getSel = () => (typeof el.__sel === 'number' ? el.__sel : -1);
+    const sel = getSel();
+
+    /* --- diff against the previous render's board --- */
+    const flip = canFlip();
+    const glides = [], ghosts = [];
+    const landSet = {};
+    let cascade = false;
+    if (flip && b.length === 64) {
+      if (!prevBoard) {
+        cascade = true; // first paint: deal the board in
+      } else {
+        let changed = 0;
+        for (let i = 0; i < 64; i++) if (!pieceSame(prevBoard[i], b[i])) changed++;
+        if (changed > 4) {
+          cascade = true; // board reset (rematch)
+        } else if (changed > 0) {
+          const froms = [], tos = [];
+          for (let i = 0; i < 64; i++) {
+            if (prevBoard[i] && !b[i]) froms.push(i);
+            else if (!prevBoard[i] && b[i]) tos.push(i);
+          }
+          const used = {};
+          for (const to of tos) { // pair moved pieces by identity (castling = 2 pairs)
+            for (let f = 0; f < froms.length; f++) {
+              if (used[f]) continue;
+              if (pieceSame(prevBoard[froms[f]], b[to])) {
+                glides.push({ from: froms[f], to: to });
+                used[f] = true;
+                break;
+              }
+            }
+          }
+          for (let f = 0; f < froms.length; f++) { // unpaired = captured (incl. en passant)
+            if (!used[f]) ghosts.push({ i: froms[f], piece: prevBoard[froms[f]] });
+          }
+          for (const g of glides) landSet[g.to] = true;
+          for (let i = 0; i < 64; i++) { // promotion: piece swapped in place
+            if (prevBoard[i] && b[i] && !pieceSame(prevBoard[i], b[i])) landSet[i] = true;
+          }
+        }
+      }
+    }
+
+    /* --- capture old square rects while the old board is still in the DOM --- */
+    const oldRects = {};
+    if (flip && (glides.length || ghosts.length)) {
+      const oldBoard = el.querySelector('.chess-board');
+      if (oldBoard) {
+        for (const g of glides) {
+          const s = oldBoard.querySelector('[data-i="' + g.from + '"]');
+          if (s) oldRects['f' + g.from] = s.getBoundingClientRect();
+        }
+        for (const g of ghosts) {
+          const s = oldBoard.querySelector('[data-i="' + g.i + '"]');
+          if (s) oldRects['g' + g.i] = s.getBoundingClientRect();
+        }
+      }
+    }
 
     el.innerHTML = '';
     const boardEl = document.createElement('div');
@@ -402,8 +496,12 @@
       const p = b[i];
       if (p) {
         const sp = document.createElement('span');
-        sp.className = 'chess-pc ' + p.c;
-        sp.textContent = GLYPH[p.p];
+        sp.className = 'chess-pc ' + p.c + (cascade ? ' deal' : landSet[i] ? ' land' : '');
+        const gl = document.createElement('span');
+        gl.className = 'pc-glyph';
+        gl.textContent = GLYPH[p.c][p.p];
+        sp.appendChild(gl);
+        if (cascade) sp.style.animationDelay = (i * 3) + 'ms';
         sq.appendChild(sp);
       }
       if (interactive) {
@@ -419,26 +517,87 @@
     }
     el.appendChild(boardEl);
 
+    /* --- FLIP invert + play, and capture ghosts --- */
+    if (flip && (glides.length || ghosts.length)) {
+      const boardRect = boardEl.getBoundingClientRect();
+      for (const g of glides) {
+        const r0 = oldRects['f' + g.from];
+        const fromSq = boardEl.querySelector('[data-i="' + g.from + '"]');
+        const toSq = boardEl.querySelector('[data-i="' + g.to + '"]');
+        const pc = toSq ? toSq.querySelector('.chess-pc') : null;
+        if (!r0 || !fromSq || !pc) continue;
+        const r1 = fromSq.getBoundingClientRect();
+        const dx = r1.left - r0.left, dy = r1.top - r0.top;
+        if (!dx && !dy) continue;
+        pc.style.zIndex = '30';
+        pc.style.transition = 'none';
+        pc.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        void pc.offsetWidth; // commit the inverted position before animating
+        pc.style.transition = 'transform .18s cubic-bezier(.2,.75,.3,1.08)';
+        pc.style.transform = 'translate(0,0)';
+        pc.addEventListener('transitionend', function done() {
+          pc.style.transition = ''; pc.style.transform = ''; pc.style.zIndex = '';
+          pc.removeEventListener('transitionend', done);
+        });
+      }
+      for (const g of ghosts) {
+        const r0 = oldRects['g' + g.i];
+        const sq = boardEl.querySelector('[data-i="' + g.i + '"]');
+        if (!r0 || !sq) continue;
+        const r1 = sq.getBoundingClientRect();
+        const gh = document.createElement('span');
+        gh.className = 'chess-pc ' + g.piece.c + ' ghost';
+        const gl = document.createElement('span');
+        gl.className = 'pc-glyph';
+        gl.textContent = GLYPH[g.piece.c][g.piece.p];
+        gh.appendChild(gl);
+        gh.style.left = (r1.left - boardRect.left) + 'px';
+        gh.style.top = (r1.top - boardRect.top) + 'px';
+        gh.style.width = r1.width + 'px';
+        gh.style.height = r1.height + 'px';
+        gh.style.zIndex = '20';
+        boardEl.appendChild(gh);
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            gh.style.transition = 'opacity .22s ease .08s, transform .22s ease .08s';
+            gh.style.opacity = '0';
+            gh.style.transform = 'scale(.55)';
+            gh.addEventListener('transitionend', function () {
+              if (gh.parentNode) gh.parentNode.removeChild(gh);
+            }, { once: true });
+          });
+        });
+        window.setTimeout(function () { if (gh.parentNode) gh.parentNode.removeChild(gh); }, 900);
+      }
+    }
+
+    prevBoard = b;
+
     function paint() {
+      const s0 = getSel();
       boardEl.querySelectorAll('.sel,.tgt').forEach((x) => x.classList.remove('sel', 'tgt'));
-      if (sel >= 0) {
-        const s = boardEl.querySelector('[data-i="' + sel + '"]');
+      if (s0 >= 0) {
+        const s = boardEl.querySelector('[data-i="' + s0 + '"]');
         if (s) s.classList.add('sel');
-        (targets[sel] || []).forEach((m) => {
+        (targets[s0] || []).forEach((m) => {
           const t = boardEl.querySelector('[data-i="' + m.to + '"]');
-          if (t) t.classList.add('tgt');
+          if (t) {
+            t.classList.add('tgt');
+            if (b[m.to]) t.classList.add('occ'); // occupied enemy target → capture ring
+          }
         });
       }
     }
 
     function onSquare(i) {
       if (!interactive) return;
+      const s0 = getSel();
       const p = b[i];
       const own = !!p && p.c === mySide;
-      if (sel === i) { el.__sel = -1; paint(); return; }
+      if (s0 === i) { el.__sel = -1; paint(); return; }
       if (own) { el.__sel = i; paint(); return; }
-      if (sel >= 0 && targets[sel]) {
-        const cands = targets[sel].filter((m) => m.to === i);
+      if (s0 >= 0 && targets[s0]) {
+        const cands = targets[s0].filter((m) => m.to === i);
         if (cands.length) {
           el.__sel = -1;
           onMove(cands.find((m) => m.promo === 'q') || cands[0]);
@@ -474,19 +633,24 @@
   }
 
   const css = [
-    '.chess-board{display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,520px);margin:0 auto;border:3px solid #232936;border-radius:8px;overflow:hidden}',
+    '.chess-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
     '.chess-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
-    '.chess-sq.light{background:#c9d4e5}',
-    '.chess-sq.dark{background:#54678a}',
-    '.chess-pc{font-size:clamp(20px,6.5vw,40px);line-height:1;user-select:none;pointer-events:none}',
-    '.chess-pc.white{color:#f8fafc;text-shadow:0 0 3px #1b2230,0 1px 2px rgba(0,0,0,.9)}',
-    '.chess-pc.black{color:#141922;text-shadow:0 0 3px rgba(255,255,255,.6)}',
+    '.chess-sq.light{background:#f0e9d8}',
+    '.chess-sq.dark{background:#5c7263}',
+    '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none}',
+    '.chess-pc .pc-glyph{display:inline-block;line-height:1}',
+    '.chess-pc.white{color:#fdfdfb;text-shadow:-1px 0 0 rgba(28,33,30,.7),1px 0 0 rgba(28,33,30,.7),0 -1px 0 rgba(28,33,30,.7),0 1px 0 rgba(28,33,30,.7),0 2px 4px rgba(28,33,30,.4)}',
+    '.chess-pc.black{color:#1f2528;text-shadow:0 1px 2px rgba(255,255,255,.35)}',
+    '.chess-pc.deal{animation:pc-deal .3s var(--ease-out) both}',
+    '.chess-pc.land .pc-glyph{animation:pc-land .34s var(--ease-spring) .1s both}',
+    '.chess-pc.ghost{position:absolute;display:flex;align-items:center;justify-content:center;opacity:.95}',
     '.chess-sq.own{cursor:pointer}',
-    '.chess-sq.sel{outline:3px solid #f5c518;outline-offset:-3px}',
+    '.chess-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(15,157,88,.45)}',
+    '.chess-sq.sel{outline:3px solid #0f9d58;outline-offset:-3px}',
     '.chess-sq.tgt{cursor:pointer}',
-    '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(245,197,24,.8);pointer-events:none}',
-    '.chess-sq.tgt.occ::after{width:88%;height:88%;background:transparent;border:4px solid rgba(245,197,24,.85)}',
-    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(96,165,250,.6)}'
+    '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(15,157,88,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
+    '.chess-sq.tgt.occ::after{width:86%;height:86%;background:transparent;border:4px solid rgba(15,157,88,.9)}',
+    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}'
   ].join('\n');
 
   const game = {

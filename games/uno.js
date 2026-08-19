@@ -88,7 +88,7 @@
     if (me === null || me >= state.hands.length) return [];
     const hand = state.hands[me];
     if (!hand || hand.length === 0) return [];
-    const top = state.discard[state.discard.length - 1];
+    const top = state.discard ? state.discard[state.discard.length - 1] : state.top;
     const out = [];
     for (let idx = 0; idx < hand.length; idx++) {
       const c = hand[idx];
@@ -171,7 +171,7 @@
   function outcome(state) {
     const empty = state.hands.findIndex((h) => h === null ? false : h.length === 0);
     if (empty >= 0) return { over: true, text: 'Player ' + (empty + 1) + ' wins — empty hand!' };
-    const top = state.discard ? state.discard[state.discard.length - 1] : null;
+    const top = state.discard ? state.discard[state.discard.length - 1] : state.top;
     if (state.hands[state.turn] === null) {
       // hidden view: rely on host-computed flags
       if (!state.canPlayNow && !state.canDrawNow && !state.drew) {
@@ -265,6 +265,12 @@
     return d;
   }
 
+  /* One-shot deal animations: render() rebuilds everything, so without a
+     guard every re-render would replay the card-deal animation. These keys
+     live in the closure and mark which areas' contents actually changed —
+     only those re-animate; the rest get .still (animation:none). */
+  let lastHandKey = '', lastTopKey = '', lastCountKey = '';
+
   function render(view, el, opts) {
     const mySide = opts.mySide;
     const interactive = !!opts.interactive;
@@ -274,13 +280,21 @@
     if (!interactive) el.__pend = -1;
     const pend = el.__pend != null ? el.__pend : -1;
 
+    const myHand = view.hands[me] || [];
+    const handKey = myHand.map((c) => (c ? c.suit + c.v : '?')).join(',');
+    const topKey = view.top ? view.top.suit + view.top.v : '';
+    const countKey = view.counts.join(',');
+    const handChanged = handKey !== lastHandKey;
+    const topChanged = topKey !== lastTopKey;
+    const countsChanged = countKey !== lastCountKey;
+
     el.innerHTML = '';
     const wrap = document.createElement('div');
     wrap.className = 'uno-wrap';
 
     /* opponents (in play order) */
     const opp = document.createElement('div');
-    opp.className = 'uno-opp';
+    opp.className = 'uno-opp' + (countsChanged ? '' : ' still');
     for (let s = 0; s < view.players; s++) {
       if (s === me) continue;
       const cell = document.createElement('div');
@@ -302,7 +316,7 @@
     const mid = document.createElement('div');
     mid.className = 'uno-mid';
     const deckPile = document.createElement('div');
-    deckPile.className = 'uno-pile';
+    deckPile.className = 'uno-pile still'; // the face-down deck never changes
     deckPile.appendChild(cardEl(null, true));
     const dcnt = document.createElement('div');
     dcnt.className = 'cnt';
@@ -311,8 +325,10 @@
     mid.appendChild(deckPile);
 
     const discPile = document.createElement('div');
-    discPile.className = 'uno-pile';
-    discPile.appendChild(cardEl(view.top, false));
+    discPile.className = 'uno-pile' + (topChanged ? '' : ' still');
+    const topCard = cardEl(view.top, false);
+    if (topChanged) topCard.classList.add('flipin');
+    discPile.appendChild(topCard);
     const scnt = document.createElement('div');
     scnt.className = 'cnt';
     scnt.textContent = view.discardCount - 1;
@@ -329,17 +345,16 @@
 
     /* my hand */
     const handRow = document.createElement('div');
-    handRow.className = 'uno-hand';
+    handRow.className = 'uno-hand' + (handChanged ? '' : ' still');
     const moves = interactive ? legalMoves(view, mySide) : [];
     const playableIdx = {};
     for (const m of moves) if (m.type === 'play') playableIdx[m.idx] = true;
-    const myHand = view.hands[me] || [];
     myHand.forEach((c, idx) => {
       const ce = cardEl(c, false);
       if (interactive && playableIdx[idx]) {
         ce.classList.add('can');
         ce.addEventListener('click', () => {
-          if (c.suit === 'w') { el.__pend = pend === idx ? -1 : idx; build(); return; }
+          if (c.suit === 'w') { el.__pend = pend === idx ? -1 : idx; render(view, el, opts); return; }
           onMove({ type: 'play', idx: idx, suit: null });
         });
       }
@@ -382,6 +397,8 @@
     }
     wrap.appendChild(act);
     el.appendChild(wrap);
+
+    lastHandKey = handKey; lastTopKey = topKey; lastCountKey = countKey;
   }
 
   function renderInfo(view, el, opts) {
@@ -401,19 +418,23 @@
   }
 
   const css = [
-    '.uno-wrap{display:flex;flex-direction:column;gap:12px;width:min(94vw,640px);margin:0 auto}',
-    '.uno-opp{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}',
-    '.uno-oppcell{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.04)}',
-    '.uno-oppcell.active{outline:2px solid #f5c518}',
-    '.uno-oppname{font-size:12px;opacity:.85}',
-    '.uno-backs{display:flex;gap:2px}',
-    '.uno-mid{display:flex;align-items:center;justify-content:center;gap:18px}',
-    '.uno-pile{position:relative;display:flex;align-items:center;justify-content:center}',
-    '.uno-pile .cnt{position:absolute;bottom:-6px;right:-4px;font-size:12px;background:#12151d;border:1px solid #2c3444;border-radius:8px;padding:0 5px;color:#cdd6e4}',
-    '.uno-info{font-size:13px;line-height:1.6;opacity:.92}',
-    '.uno-suit-r{color:#ff6b5e}.uno-suit-y{color:#ffd75e}.uno-suit-g{color:#5ad07f}.uno-suit-b{color:#6aa8ff}',
-    '.uno-hand{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;min-height:70px}',
-    '.uno-card{position:relative;width:46px;height:66px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#20242e;border:2px solid rgba(0,0,0,.7);box-shadow:0 2px 5px rgba(0,0,0,.5);flex:0 0 auto}',
+    '.uno-wrap{display:flex;flex-direction:column;gap:14px;width:min(94vw,640px);margin:0 auto}',
+    '.uno-opp{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}',
+    '.uno-oppcell{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 14px;border-radius:14px;background:#faf9f5;border:1px solid #e4e0d4;transition:border-color .2s, background .2s, box-shadow .2s}',
+    '.uno-oppcell.active{border-color:#0f9d58;background:#e7f5ec;box-shadow:inset 0 0 0 1px #0f9d58}',
+    '.uno-oppname{font-size:12px;font-weight:600;color:#5c6560;letter-spacing:.02em}',
+    '.uno-backs{display:flex;gap:3px}',
+    '.uno-mid{display:flex;align-items:center;justify-content:center;gap:22px}',
+    '.uno-pile{position:relative;display:flex;align-items:center;justify-content:center;perspective:420px}',
+    '.uno-pile.still .uno-card{animation:none}',
+    '.uno-opp.still .uno-card{animation:none}',
+    '.uno-hand.still .uno-card{animation:none}',
+    '.uno-card.flipin{animation:card-flip .34s var(--ease-spring) both}',
+    '.uno-pile .cnt{position:absolute;bottom:-8px;right:-8px;font-size:11.5px;font-weight:700;background:#fff;border:1px solid #d3cdbd;border-radius:999px;padding:1px 8px;color:#47514b;box-shadow:0 1px 3px rgba(28,33,30,.12)}',
+    '.uno-info{font-size:13px;line-height:1.65;color:#47514b}',
+    '.uno-suit-r{color:#d64533;font-weight:700}.uno-suit-y{color:#c79a08;font-weight:700}.uno-suit-g{color:#1c7138;font-weight:700}.uno-suit-b{color:#1d4a99;font-weight:700}',
+    '.uno-hand{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;min-height:76px}',
+    '.uno-card{position:relative;width:48px;height:68px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#20242e;border:none;box-shadow:0 2px 6px rgba(28,33,30,.22);flex:0 0 auto;animation:card-deal .28s var(--ease-out) both}',
     '.uno-card.r{background:linear-gradient(140deg,#e0453a,#a3271f)}',
     '.uno-card.y{background:linear-gradient(140deg,#f0c419,#c79a08)}',
     '.uno-card.g{background:linear-gradient(140deg,#2ea44f,#1c7138)}',
@@ -422,13 +443,32 @@
     '.uno-val{font-weight:800;font-size:24px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.9);transform:rotate(-8deg);user-select:none}',
     '.uno-card.back{background:radial-gradient(circle at 50% 45%, #e8ebf2 16%, #232836 17%)}',
     '.uno-card.back{width:30px;height:44px}',
-    '.uno-card.can{cursor:pointer;outline:3px solid #f5c518;transition:transform .08s}',
-    '.uno-card.can:hover{transform:translateY(-6px)}',
-    '.uno-card.pend{outline:3px solid #fff}',
-    '.uno-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;min-height:34px}',
-    '.uno-suitbtn{font-weight:700;border-radius:8px;padding:6px 14px;color:#fff;border:none;cursor:pointer}',
+    '.uno-backs .uno-card:nth-child(2){animation-delay:.03s}',
+    '.uno-backs .uno-card:nth-child(3){animation-delay:.06s}',
+    '.uno-backs .uno-card:nth-child(4){animation-delay:.09s}',
+    '.uno-backs .uno-card:nth-child(5){animation-delay:.12s}',
+    '.uno-backs .uno-card:nth-child(6){animation-delay:.15s}',
+    '.uno-backs .uno-card:nth-child(7){animation-delay:.18s}',
+    '.uno-hand .uno-card:nth-child(2){animation-delay:.03s}',
+    '.uno-hand .uno-card:nth-child(3){animation-delay:.06s}',
+    '.uno-hand .uno-card:nth-child(4){animation-delay:.09s}',
+    '.uno-hand .uno-card:nth-child(5){animation-delay:.12s}',
+    '.uno-hand .uno-card:nth-child(6){animation-delay:.15s}',
+    '.uno-hand .uno-card:nth-child(7){animation-delay:.18s}',
+    '.uno-hand .uno-card:nth-child(8){animation-delay:.21s}',
+    '.uno-hand .uno-card:nth-child(9){animation-delay:.24s}',
+    '.uno-hand .uno-card:nth-child(10){animation-delay:.27s}',
+    '.uno-hand .uno-card:nth-child(11){animation-delay:.30s}',
+    '.uno-hand .uno-card:nth-child(12){animation-delay:.33s}',
+    '.uno-card.can{cursor:pointer;outline:3px solid #0f9d58;outline-offset:1px;transition:transform .12s var(--ease-spring), outline-color .12s}',
+    '.uno-card.can:hover{transform:translateY(-8px) rotate(1deg)}',
+    '.uno-card.pend{outline:3px solid #fff;box-shadow:0 0 0 5px rgba(15,157,88,.5), 0 4px 12px rgba(28,33,30,.3);transform:translateY(-8px)}',
+    '.uno-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;min-height:38px}',
+    '.uno-suitbtn{font-weight:800;border-radius:10px;padding:9px 18px;color:#fff;border:none;cursor:pointer;letter-spacing:.03em;box-shadow:0 3px 0 rgba(0,0,0,.25);transition:transform .1s, box-shadow .1s, filter .15s}',
+    '.uno-suitbtn:hover{filter:brightness(1.12);transform:translateY(-1px)}',
+    '.uno-suitbtn:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.25)}',
     '.uno-suitbtn-r{background:#c0392b}.uno-suitbtn-y{background:#c79a08}.uno-suitbtn-g{background:#1c7138}.uno-suitbtn-b{background:#1d4a99}',
-    '.uno-hint{color:#ffd75e}'
+    '.uno-hint{color:#8a6a1f;font-weight:600}'
   ].join('\n');
 
   const game = {
