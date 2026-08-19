@@ -477,19 +477,20 @@
   }
 
   const css = [
-    '.chess-board{display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,520px);margin:0 auto;border:3px solid #232936;border-radius:8px;overflow:hidden}',
+    '.chess-board{display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
     '.chess-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
-    '.chess-sq.light{background:#c9d4e5}',
-    '.chess-sq.dark{background:#54678a}',
-    '.chess-pc{font-size:clamp(20px,6.5vw,40px);line-height:1;user-select:none;pointer-events:none}',
-    '.chess-pc.white{color:#f8fafc;text-shadow:0 0 3px #1b2230,0 1px 2px rgba(0,0,0,.9)}',
-    '.chess-pc.black{color:#141922;text-shadow:0 0 3px rgba(255,255,255,.6)}',
+    '.chess-sq.light{background:#f0e9d8}',
+    '.chess-sq.dark{background:#5c7263}',
+    '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none;animation:pc-settle .18s var(--ease-out) both}',
+    '.chess-pc.white{color:#fbfaf5;text-shadow:0 1px 2px rgba(0,0,0,.55), 0 0 2px rgba(0,0,0,.35)}',
+    '.chess-pc.black{color:#1f2528;text-shadow:0 1px 2px rgba(255,255,255,.35)}',
     '.chess-sq.own{cursor:pointer}',
-    '.chess-sq.sel{outline:3px solid #f5c518;outline-offset:-3px}',
+    '.chess-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(15,157,88,.45)}',
+    '.chess-sq.sel{outline:3px solid #0f9d58;outline-offset:-3px}',
     '.chess-sq.tgt{cursor:pointer}',
-    '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(245,197,24,.8);pointer-events:none}',
-    '.chess-sq.tgt.occ::after{width:88%;height:88%;background:transparent;border:4px solid rgba(245,197,24,.85)}',
-    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(96,165,250,.6)}'
+    '.chess-sq.tgt::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(15,157,88,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
+    '.chess-sq.tgt.occ::after{width:86%;height:86%;background:transparent;border:4px solid rgba(15,157,88,.9)}',
+    '.chess-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}'
   ].join('\n');
 
   const game = {
