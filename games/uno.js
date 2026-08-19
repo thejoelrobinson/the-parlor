@@ -258,10 +258,23 @@
   function cardEl(c, isBack) {
     const d = document.createElement('div');
     d.className = 'uno-card' + (isBack ? ' back' : c.suit === 'w' ? ' w' : ' ' + c.suit);
+    const oval = document.createElement('span');
+    oval.className = 'uno-oval';
+    d.appendChild(oval);
     const big = document.createElement('span');
     big.className = 'uno-val';
     big.textContent = isBack ? '' : label(c);
     d.appendChild(big);
+    if (!isBack) {
+      const i1 = document.createElement('span');
+      i1.className = 'uno-idx';
+      i1.textContent = label(c);
+      const i2 = document.createElement('span');
+      i2.className = 'uno-idx b';
+      i2.textContent = label(c);
+      d.appendChild(i1);
+      d.appendChild(i2);
+    }
     return d;
   }
 
@@ -272,6 +285,8 @@
   let lastHandKey = '', lastTopKey = '', lastCountKey = '';
    let lastHandArr = null;  // previous hand — detects "one card appended" (a draw)
    let lastDeckKey = '';    // deckCount:canDraw — fires the reshuffle spin once
+   let lastNoteKey = '';    // seat:text:discardCount:counts — one play-note per action
+   let lastDeckCount = -1;  // deck count — fires the deck pop when a card is drawn
 
   function render(view, el, opts) {
     const mySide = opts.mySide;
@@ -325,8 +340,9 @@
     mid.className = 'uno-mid';
     const deckKey = view.deckCount + ':' + (view.canDrawNow ? 1 : 0);
     const deckSpin = view.deckCount === 0 && view.canDrawNow && deckKey !== lastDeckKey;
+    const deckDealt = !deckSpin && lastDeckCount >= 0 && view.deckCount < lastDeckCount;
     const deckPile = document.createElement('div');
-    deckPile.className = 'uno-pile uno-deck' + (deckSpin ? ' shuffling' : ' still');
+    deckPile.className = 'uno-pile uno-deck' + (deckSpin ? ' shuffling' : deckDealt ? ' dealt' : ' still');
     const d1 = cardEl(null, true); d1.className += ' uno-d1';
     const d2 = cardEl(null, true); d2.className += ' uno-d2';
     const d3 = cardEl(null, true); d3.className += ' uno-d3';
@@ -339,14 +355,25 @@
     deckPile.appendChild(dcnt);
     mid.appendChild(deckPile);
 
+    const noteKey = view.last
+      ? view.last.seat + ':' + view.last.text + ':' + view.discardCount + ':' + view.counts.join(',')
+      : '';
+    const noteChanged = noteKey !== lastNoteKey;
+
     const discPile = document.createElement('div');
     discPile.className = 'uno-pile uno-disc' + (topChanged ? '' : ' still');
     const under = cardEl(null, true);
     under.className += ' uno-under';
     discPile.appendChild(under);
     const topCard = cardEl(view.top, false);
-    if (topChanged) topCard.classList.add('flipin');
+    if (topChanged) topCard.classList.add(view.last && view.last.seat === me ? 'playin-mine' : 'playin-opp');
     discPile.appendChild(topCard);
+    if (view.last && noteChanged) {
+      const note = document.createElement('div');
+      note.className = 'uno-note';
+      note.textContent = view.last.text.replace('Player ' + (me + 1), 'You');
+      discPile.appendChild(note);
+    }
     const scnt = document.createElement('div');
     scnt.className = 'cnt';
     scnt.textContent = view.discardCount - 1;
@@ -391,6 +418,7 @@
         ce.style.zIndex = String(idx);
       }
       if (handMode === 'drawn' && idx !== myHand.length - 1) ce.classList.add('uno-still');
+      if (handMode === 'drawn' && idx === myHand.length - 1) ce.classList.add('drawn');
       if (myHand.length === 1) ce.classList.add('last');
       if (interactive && playableIdx[idx]) {
         ce.classList.add('can');
@@ -443,6 +471,8 @@
     lastHandKey = handKey; lastTopKey = topKey; lastCountKey = countKey;
     lastHandArr = myHand.map((c) => (c ? { suit: c.suit, v: c.v } : null));
     lastDeckKey = deckKey;
+    lastNoteKey = noteKey;
+    lastDeckCount = view.deckCount;
   }
 
   function renderInfo(view, el, opts) {
@@ -473,19 +503,22 @@
     '.uno-mid{display:flex;align-items:center;justify-content:center;gap:22px}',
     '.uno-pile{position:relative;perspective:420px}',
     '.uno-pile.still .uno-card{animation:none}',
-    '.uno-deck{display:grid;place-items:center;width:36px;height:50px}',
+    '.uno-deck{display:grid;place-items:center;width:56px;height:80px}',
     '.uno-deck .uno-card{grid-area:1/1}',
-    '.uno-d1{transform:translate(-4px,-4px) rotate(-5deg);opacity:.45}',
-    '.uno-d2{transform:translate(-2px,-2px) rotate(-2.5deg);opacity:.7}',
+    '.uno-d1{transform:translate(-6px,-7px) rotate(-6deg);opacity:.4}',
+    '.uno-d2{transform:translate(-3px,-3px) rotate(-3deg);opacity:.7}',
     '.uno-d3{z-index:1}',
     '.uno-deck.shuffling{animation:dir-spin .8s var(--ease-out) both}',
-    '.uno-disc{display:grid;place-items:center;width:56px;height:78px}',
+    '.uno-deck.dealt .uno-d3{animation:deck-pop .35s var(--ease-spring) both}',
+    '.uno-disc{display:grid;place-items:center;width:62px;height:86px}',
     '.uno-disc .uno-card{grid-area:1/1}',
-    '.uno-under{transform:translate(-3px,-3px) rotate(-4deg);opacity:.7;animation:none}',
+    '.uno-under{transform:translate(-4px,-5px) rotate(-5deg);opacity:.75;animation:none}',
     '.uno-disc .uno-card:not(.uno-under){z-index:1}',
+    '.uno-note{position:absolute;top:-24px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:12px;font-weight:700;letter-spacing:.02em;color:#f7f2e5;background:#232836;padding:3px 11px;border-radius:999px;box-shadow:0 2px 6px rgba(28,33,30,.3);pointer-events:none;z-index:6;animation:note-fade 1.6s var(--ease-out) both}',
     '.uno-opp.still .uno-card{animation:none}',
     '.uno-hand.still .uno-card{animation:none}',
-    '.uno-card.flipin{animation:card-flip .34s var(--ease-spring) both}',
+    '.uno-card.playin-mine{animation:uno-play-mine .55s var(--ease-glide) both}',
+    '.uno-card.playin-opp{animation:uno-play-opp .5s var(--ease-glide) both}',
     '.uno-pile .cnt{position:absolute;bottom:-8px;right:-8px;font-size:11.5px;font-weight:700;background:#fff;border:1px solid #d3cdbd;border-radius:999px;padding:1px 8px;color:#47514b;box-shadow:0 1px 3px rgba(28,33,30,.12)}',
     '.uno-info{font-size:13px;line-height:1.65;color:#47514b}',
     '.uno-dirrow{display:flex;align-items:center;gap:6px}',
@@ -496,15 +529,27 @@
     '.uno-hand .uno-card{margin-left:-16px}',
     '.uno-hand .uno-card:first-child{margin-left:0}',
     '.uno-still{animation:none !important}',
-    '.uno-card{position:relative;width:48px;height:68px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#20242e;border:none;box-shadow:0 2px 6px rgba(28,33,30,.22);flex:0 0 auto;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1));animation:uno-deal .3s var(--ease-out) both}',
+    '.uno-card{position:relative;width:52px;height:74px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#20242e;box-shadow:0 3px 8px rgba(28,33,30,.28);flex:0 0 auto;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1));animation:uno-deal .3s var(--ease-out) both;transition:transform .32s var(--ease-glide)}',
+    '.uno-card::before{content:"";position:absolute;inset:0;border-radius:11px;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -3px 8px rgba(0,0,0,.28);pointer-events:none}',
+    '.uno-oval{position:absolute;inset:19% 7%;background:#f7f2e5;border-radius:50%;transform:rotate(-16deg);box-shadow:inset 0 0 0 1.5px rgba(28,33,30,.14)}',
+    '.uno-val{position:relative;z-index:1;font-family:var(--font-display);font-weight:900;font-size:25px;line-height:1;color:#fff;transform:rotate(-16deg);user-select:none}',
+    '.uno-idx{position:absolute;z-index:1;top:4px;left:6px;font-family:var(--font-display);font-size:10px;font-weight:800;line-height:1;color:#f7f2e5;text-shadow:0 1px 2px rgba(0,0,0,.55);transform:rotate(-16deg)}',
+    '.uno-idx.b{top:auto;left:auto;bottom:4px;right:6px;transform:rotate(164deg)}',
     '.uno-card.r{background:linear-gradient(140deg,#b04a33,#7f2a1c)}',
+    '.uno-card.r .uno-val{color:#9c2f1e}',
     '.uno-card.y{background:linear-gradient(140deg,#d2a12e,#9c7415)}',
+    '.uno-card.y .uno-val{color:#8a6510}',
     '.uno-card.g{background:linear-gradient(140deg,#3c8551,#1e5634)}',
+    '.uno-card.g .uno-val{color:#1e5634}',
     '.uno-card.b{background:linear-gradient(140deg,#48699a,#2a466e)}',
+    '.uno-card.b .uno-val{color:#2a466e}',
     '.uno-card.w{background:conic-gradient(#b04a33 0 25%,#48699a 0 50%,#3c8551 0 75%,#d2a12e 0 100%)}',
-    '.uno-val{font-family:var(--font-display);font-weight:700;font-size:24px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.9);transform:rotate(-8deg);user-select:none}',
-    '.uno-card.back{background:radial-gradient(circle at 50% 45%, #c29330 15%, #232836 16%)}',
-    '.uno-card.back{width:30px;height:44px}',
+    '.uno-card.w .uno-val{color:#232836}',
+    '.uno-card.back{background:#232836;width:34px;height:48px}',
+    '.uno-card.back .uno-oval{inset:22% 14%;background:#f7f2e5}',
+    '.uno-card.back::after{content:"";position:absolute;z-index:1;left:50%;top:50%;width:9px;height:13px;margin:-6.5px 0 0 -4.5px;border-radius:50%;background:#c29330;transform:rotate(-16deg)}',
+    '.uno-card.back.uno-under{width:52px;height:74px}',
+    '.uno-deck .uno-card.back{width:52px;height:74px}',
     '.uno-backs .uno-card:nth-child(2){animation-delay:.03s}',
     '.uno-backs .uno-card:nth-child(3){animation-delay:.06s}',
     '.uno-backs .uno-card:nth-child(4){animation-delay:.09s}',
@@ -527,13 +572,19 @@
     '.uno-card.pend{outline:3px solid #fff;box-shadow:0 0 0 5px rgba(22,104,63,.5), 0 4px 12px rgba(28,33,30,.3);transform:translateY(-16px) scale(1.07) rotate(0);z-index:50}',
     '.uno-card.last{outline:3px solid var(--gold);animation:uno-last-pulse 1.2s ease-in-out infinite}',
     '@keyframes uno-last-pulse{0%,100%{box-shadow:0 2px 6px rgba(28,33,30,.22), 0 0 0 0 rgba(194,147,48,0)}50%{box-shadow:0 2px 6px rgba(28,33,30,.22), 0 0 0 9px rgba(194,147,48,.4)}}',
+    '.uno-card.drawn{animation:uno-drawfly .6s var(--ease-glide) both;animation-delay:.06s}',
     '.uno-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;min-height:38px}',
     '.uno-suitbtn{font-weight:800;border-radius:10px;padding:9px 18px;color:#fff;border:none;cursor:pointer;letter-spacing:.03em;box-shadow:0 3px 0 rgba(0,0,0,.25);transition:transform .1s, box-shadow .1s, filter .15s}',
     '.uno-suitbtn.suitin{animation:entry-in .32s var(--ease-spring) backwards}',
     '.uno-suitbtn:hover{filter:brightness(1.12);transform:translateY(-1px)}',
     '.uno-suitbtn:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.25)}',
     '.uno-suitbtn-r{background:#7f2a1c}.uno-suitbtn-y{background:#9c7415}.uno-suitbtn-g{background:#1e5634}.uno-suitbtn-b{background:#2a466e}',
-    '.uno-hint{color:#8a6a1f;font-weight:600}'
+    '.uno-hint{color:#8a6a1f;font-weight:600}',
+    '@keyframes uno-play-mine{0%{opacity:0;transform:translate(40px,320px) rotate(20deg) scale(.7)}55%{opacity:1;transform:translate(12px,110px) rotate(6deg) scale(.92)}80%{transform:translate(-4px,-8px) rotate(-1.5deg) scale(1.05)}100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}}',
+    '@keyframes uno-play-opp{0%{opacity:0;transform:translate(0,-320px) rotate(-18deg) scale(.7)}55%{opacity:1;transform:translate(0,-110px) rotate(-5deg) scale(.93)}80%{transform:translate(0,10px) rotate(1.5deg) scale(1.05)}100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}}',
+    '@keyframes uno-drawfly{0%{opacity:0;transform:translate(-230px,-300px) rotate(-14deg) scale(.6)}60%{opacity:1;transform:translate(-80px,-120px) rotate(-5deg) scale(.9)}100%{opacity:1;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1)) scale(1)}}',
+    '@keyframes note-fade{0%{opacity:0;transform:translate(-50%,8px)}12%{opacity:1;transform:translate(-50%,0)}72%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,-10px)}}',
+    '@keyframes deck-pop{0%{transform:scale(.8)}60%{transform:scale(1.1)}100%{transform:scale(1)}}'
   ].join('\n');
 
   const game = {
