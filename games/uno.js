@@ -339,7 +339,7 @@
       if (interactive && playableIdx[idx]) {
         ce.classList.add('can');
         ce.addEventListener('click', () => {
-          if (c.suit === 'w') { el.__pend = pend === idx ? -1 : idx; build(); return; }
+          if (c.suit === 'w') { el.__pend = pend === idx ? -1 : idx; render(view, el, opts); return; }
           onMove({ type: 'play', idx: idx, suit: null });
         });
       }
