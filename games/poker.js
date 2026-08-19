@@ -495,6 +495,19 @@
      .pkr-still (animation:none), so re-renders never replay the stagger. */
   let lastBoardKey = '', lastHoleKey = '', lastRevealKey = '';
   let lastBoardLen = 0, lastPotKey = '', lastBets = null;
+  let lastPhaseKey = '', lastFolded = null;
+
+  function motionOff() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+
+  function canFly() {
+    if (typeof window.requestAnimationFrame !== 'function') return false;
+    if (motionOff()) return false;
+    return typeof document.createElement('div').getBoundingClientRect === 'function';
+  }
 
   function blindTag(i, view) {
     if (view.phase !== 'preflop') return '';
@@ -518,6 +531,7 @@
     if (!view.result && String(view.turn) === String(i)) cls.push('active');
     if (p.folded) cls.push('folded');
     if (winner) cls.push('winner');
+    if (winner && flags.revealChanged) cls.push('win-pop');
     s.className = cls.join(' ');
 
     const head = document.createElement('div');
@@ -563,9 +577,10 @@
         cards.appendChild(ce);
       });
     } else {
+      const foldNew = !!(lastFolded && lastFolded[i] !== p.folded);
       for (let j = 0; j < 2; j++) {
         const b = document.createElement('div');
-        b.className = 'card-back small' + (p.folded ? ' pkr-dim' : '');
+        b.className = 'card-back small' + (p.folded ? ' pkr-dim' : '') + (foldNew && p.folded ? ' pkr-foldbeat' : '');
         cards.appendChild(b);
       }
     }
@@ -620,21 +635,44 @@
     const revealChanged = revealKey !== lastRevealKey;
     const potKey = String(view.pot);
     const betsArr = view.players.map((p) => p.bet);
+    const foldedArr = view.players.map((p) => p.folded);
+    const flights = canFly()
+      ? view.players.map((p, i) => ({ i: i, paid: p.bet - (lastBets ? lastBets[i] : 0) })).filter((f) => f.paid > 0)
+      : [];
 
     el.innerHTML = '';
 
     const table = document.createElement('div');
     table.className = 'pkr-table';
+    const seatEls = new Array(view.n);
 
     const oppRow = document.createElement('div');
     oppRow.className = 'pkr-seat-row';
     for (let i = 0; i < view.n; i++) {
-      if (i !== mySeat) oppRow.appendChild(seatEl(view, i, opts, { holeChanged, revealChanged }));
+      if (i !== mySeat) {
+        const se = seatEl(view, i, opts, { holeChanged, revealChanged });
+        seatEls[i] = se;
+        oppRow.appendChild(se);
+      }
     }
     table.appendChild(oppRow);
 
     const mid = document.createElement('div');
     mid.className = 'pkr-mid';
+
+    const phaseEl = document.createElement('div');
+    phaseEl.className = 'pkr-phase' + (view.phase !== lastPhaseKey ? '' : ' pkr-still');
+    phaseEl.textContent = view.phase === 'preflop' ? 'Preflop'
+      : view.phase === 'over' ? 'Result'
+        : view.phase.charAt(0).toUpperCase() + view.phase.slice(1);
+    mid.appendChild(phaseEl);
+
+    if (over) {
+      const res = document.createElement('div');
+      res.className = 'pkr-result' + (revealChanged ? '' : ' pkr-still');
+      res.textContent = outcome(view).text;
+      mid.appendChild(res);
+    }
 
     const board = document.createElement('div');
     board.className = 'pkr-board';
@@ -676,8 +714,33 @@
     mid.appendChild(pot);
 
     table.appendChild(mid);
-    table.appendChild(seatEl(view, mySeat, opts, { holeChanged, revealChanged }));
+    const meEl = seatEl(view, mySeat, opts, { holeChanged, revealChanged });
+    seatEls[mySeat] = meEl;
+    table.appendChild(meEl);
     el.appendChild(table);
+
+    /* --- chip flight: chips paid this render fly from the paying seat into the pot --- */
+    if (flights.length) {
+      const tr = table.getBoundingClientRect();
+      const dr = disc.getBoundingClientRect();
+      for (const f of flights) {
+        const sr = seatEls[f.i].getBoundingClientRect();
+        const ch = document.createElement('span');
+        ch.className = 'pkr-fly';
+        ch.textContent = String(f.paid);
+        ch.style.left = (sr.left + sr.width / 2 - tr.left) + 'px';
+        ch.style.top = (sr.top + sr.height / 2 - tr.top) + 'px';
+        table.appendChild(ch);
+        const dx = dr.left + dr.width / 2 - (sr.left + sr.width / 2);
+        const dy = dr.top + dr.height / 2 - (sr.top + sr.height / 2);
+        requestAnimationFrame(() => {
+          ch.style.transition = 'transform .45s var(--ease-out), opacity .4s ease-out .12s';
+          ch.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(.45)';
+          ch.style.opacity = '0';
+          setTimeout(() => { if (ch.parentNode) ch.parentNode.removeChild(ch); }, 560);
+        });
+      }
+    }
 
     if (opts.interactive && !over && String(view.turn) === String(mySeat)) {
       el.appendChild(actionBar(view, opts));
@@ -685,6 +748,7 @@
 
     lastBoardKey = boardKey; lastHoleKey = holeKey; lastRevealKey = revealKey;
     lastBoardLen = newLen; lastPotKey = potKey; lastBets = betsArr;
+    lastPhaseKey = view.phase; lastFolded = foldedArr;
   }
 
   function renderInfo(view, el, opts) {
@@ -716,7 +780,7 @@
   /* ---------- css (pkr- prefix) ---------- */
 
   const css = [
-    '.pkr-table{width:min(100%,660px);margin:0 auto;border-radius:26px;padding:16px 14px 18px;',
+    '.pkr-table{width:min(100%,660px);margin:0 auto;border-radius:26px;padding:16px 14px 18px;position:relative;overflow:hidden;',
     'background:radial-gradient(130% 150% at 50% -10%, #1e6b43 0%, #16683f 48%, var(--green-deep) 100%);',
     'border:1px solid #c9c2ae;box-shadow:var(--shadow-md), inset 0 2px 14px rgba(0,0,0,.3)}',
     '.pkr-seat-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}',
@@ -734,7 +798,7 @@
     '.pkr-blind{font-size:9px;font-weight:800;letter-spacing:.1em;color:#fff;background:rgba(0,0,0,.28);border-radius:6px;padding:1px 5px}',
     '.pkr-seat-cards{display:flex;gap:6px;justify-content:center;align-items:center;min-height:52px;perspective:600px}',
     '.pkr-seat.me .pkr-seat-cards{min-height:80px}',
-    '.pkr-dim{opacity:.4}',
+    '.pkr-dim{opacity:.4;transform:scale(.92)}',
     '.pkr-seat-meta{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;min-height:18px}',
     '.pkr-stack{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--ink)}',
     '.pkr-bet{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:18px;padding:0 6px;border-radius:9px;',
@@ -754,6 +818,20 @@
     '.pkr-pot-num{color:#fff;font-family:var(--font-display);font-weight:700;font-size:14px;text-shadow:0 1px 2px rgba(90,60,5,.5)}',
     '.pkr-pot-lbl{font-size:9px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
     '.pkr-pot-disc.pkr-pot-pop{animation:pot-pop .32s var(--ease-spring) both}',
+    '.pkr-phase{font-size:10px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.85);',
+    'background:rgba(0,0,0,.28);border-radius:8px;padding:3px 10px;animation:pkr-phase-in .3s var(--ease-out) both}',
+    '.pkr-result{font-family:var(--font-display);font-weight:700;font-size:clamp(15px,3.4vw,19px);color:#fff;',
+    'text-shadow:0 1px 4px rgba(0,0,0,.4);max-width:100%;text-align:center;animation:pkr-result-in .5s var(--ease-spring) both}',
+    '@keyframes pkr-phase-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
+    '@keyframes pkr-result-in{0%{opacity:0;transform:scale(1.35)}60%{opacity:1;transform:scale(.97)}100%{opacity:1;transform:scale(1)}}',
+    '.pkr-fly{position:absolute;left:0;top:0;z-index:60;display:inline-flex;align-items:center;justify-content:center;',
+    'min-width:24px;height:24px;padding:0 6px;border-radius:12px;',
+    'background:radial-gradient(120% 140% at 30% 20%, #d4a83f, #a87c15 78%);color:#fff;font-size:11px;font-weight:800;',
+    'box-shadow:0 2px 5px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.28);pointer-events:none}',
+    '.pkr-seat.win-pop{animation:pkr-win-pop .6s var(--ease-spring) .1s both}',
+    '@keyframes pkr-win-pop{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}',
+    '.pkr-foldbeat{animation:pkr-foldbeat .4s var(--ease-out) both}',
+    '@keyframes pkr-foldbeat{from{opacity:1;transform:scale(1)}to{opacity:.4;transform:scale(.92)}}',
     '.pkr-board .card-face:nth-child(2){animation-delay:.05s}',
     '.pkr-board .card-face:nth-child(3){animation-delay:.1s}',
     '.pkr-board .card-face:nth-child(4){animation-delay:.15s}',
