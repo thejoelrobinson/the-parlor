@@ -461,27 +461,148 @@
         addBtn('Pot ' + potR.amount, '', () => opts.onMove(potR));
       }
       addBtn('All-in ' + maxR.amount, 'pkr-call', () => opts.onMove(maxR));
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.className = 'pkr-raise-input';
-      input.min = String(minR.amount);
-      input.max = String(maxR.amount);
-      input.value = String(Math.min(view.pot, maxR.amount));
-      bar.appendChild(input);
-      addBtn('Raise', 'pkr-call', () => {
-        const v = parseInt(input.value, 10);
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.className = 'pkr-raise-range';
+      range.min = String(minR.amount);
+      range.max = String(maxR.amount);
+      range.step = '1';
+      const defVal = Math.max(minR.amount, Math.min(view.pot, maxR.amount));
+      range.value = String(defVal);
+      bar.appendChild(range);
+      const raiseBtn = document.createElement('button');
+      raiseBtn.className = 'btn pkr-call pkr-raise-btn';
+      raiseBtn.textContent = 'Raise to ' + defVal;
+      range.addEventListener('input', () => {
+        const v = parseInt(range.value, 10);
+        if (!Number.isNaN(v)) raiseBtn.textContent = 'Raise to ' + v;
+      });
+      raiseBtn.addEventListener('click', () => {
+        let v = parseInt(range.value, 10);
+        if (Number.isNaN(v)) v = defVal;
+        v = Math.max(minR.amount, Math.min(v, maxR.amount));
         const m = raises.find((r) => r.amount === v);
         if (m) opts.onMove(m);
       });
+      bar.appendChild(raiseBtn);
     }
     return bar;
   }
 
   /* One-shot deal animations: same closure-key guard as UNO — each area only
      re-animates when its contents actually changed (a new board card, the
-     hole deal, the reveal). Everything else gets .still (animation:none),
-     so re-renders never replay the card-deal stagger. */
+     hole deal, the reveal, a bet chip, the pot). Everything else gets
+     .pkr-still (animation:none), so re-renders never replay the stagger. */
   let lastBoardKey = '', lastHoleKey = '', lastRevealKey = '';
+  let lastBoardLen = 0, lastPotKey = '', lastBets = null;
+
+  function blindTag(i, view) {
+    if (view.phase !== 'preflop') return '';
+    const sb = view.n === 2 ? view.dealer : (view.dealer + 1) % view.n;
+    if (i === sb) return 'SB';
+    if (i === (sb + 1) % view.n) return 'BB';
+    return '';
+  }
+
+  function seatEl(view, i, opts, flags) {
+    const mySeat = parseInt(opts.mySide, 10);
+    const p = view.players[i];
+    const isMe = i === mySeat;
+    const winner = !!view.result && view.result.winners.some((w) => w.seat === i);
+    const reveal = view.result && view.result.revealed
+      ? view.result.revealed.find((r) => r.seat === i)
+      : null;
+    const s = document.createElement('div');
+    const cls = ['pkr-seat'];
+    if (isMe) cls.push('me');
+    if (!view.result && String(view.turn) === String(i)) cls.push('active');
+    if (p.folded) cls.push('folded');
+    if (winner) cls.push('winner');
+    s.className = cls.join(' ');
+
+    const head = document.createElement('div');
+    head.className = 'pkr-seat-head';
+    const nm = document.createElement('span');
+    nm.className = 'pkr-seat-name';
+    nm.textContent = isMe ? 'You' : 'Player ' + (i + 1);
+    head.appendChild(nm);
+    if (view.dealer === i) {
+      const d = document.createElement('span');
+      d.className = 'pkr-dealer';
+      d.textContent = 'D';
+      head.appendChild(d);
+    }
+    const blind = blindTag(i, view);
+    if (blind) {
+      const bt = document.createElement('span');
+      bt.className = 'pkr-blind';
+      bt.textContent = blind;
+      head.appendChild(bt);
+    }
+    s.appendChild(head);
+
+    const cards = document.createElement('div');
+    cards.className = 'pkr-seat-cards';
+    if (isMe && p.hole && !p.folded) {
+      p.hole.forEach((c, j) => {
+        const ce = cardEl(c);
+        if (!flags.holeChanged) ce.classList.add('pkr-still');
+        if (j === 1 && ce.style && ce.style.setProperty) ce.style.setProperty('animation-delay', '.07s');
+        cards.appendChild(ce);
+      });
+    } else if (reveal) {
+      const rIdx = view.result.revealed.indexOf(reveal);
+      reveal.hole.forEach((c, j) => {
+        const ce = cardEl(c);
+        ce.classList.add('small');
+        if (flags.revealChanged) ce.classList.add('pkr-flip');
+        else ce.classList.add('pkr-still');
+        if (ce.style && ce.style.setProperty) {
+          ce.style.setProperty('animation-delay', (rIdx * .09 + j * .05) + 's');
+        }
+        cards.appendChild(ce);
+      });
+    } else {
+      for (let j = 0; j < 2; j++) {
+        const b = document.createElement('div');
+        b.className = 'card-back small' + (p.folded ? ' pkr-dim' : '');
+        cards.appendChild(b);
+      }
+    }
+    s.appendChild(cards);
+
+    const meta = document.createElement('div');
+    meta.className = 'pkr-seat-meta';
+    const stack = document.createElement('span');
+    stack.className = 'pkr-stack';
+    stack.textContent = p.stack;
+    meta.appendChild(stack);
+    if (p.bet > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'pkr-bet' + (lastBets && lastBets[i] === p.bet ? ' pkr-still' : '');
+      chip.textContent = p.bet;
+      meta.appendChild(chip);
+    }
+    if (p.folded) {
+      const t = document.createElement('span');
+      t.className = 'pkr-tag';
+      t.textContent = 'folded';
+      meta.appendChild(t);
+    } else if (p.allIn) {
+      const t = document.createElement('span');
+      t.className = 'pkr-tag';
+      t.textContent = 'all-in';
+      meta.appendChild(t);
+    }
+    if (winner) {
+      const t = document.createElement('span');
+      t.className = 'pkr-tag pkr-win';
+      t.textContent = 'wins';
+      meta.appendChild(t);
+    }
+    s.appendChild(meta);
+    return s;
+  }
 
   function render(view, el, opts) {
     const mySeat = parseInt(opts.mySide, 10);
@@ -497,51 +618,73 @@
     const boardChanged = boardKey !== lastBoardKey;
     const holeChanged = holeKey !== lastHoleKey;
     const revealChanged = revealKey !== lastRevealKey;
+    const potKey = String(view.pot);
+    const betsArr = view.players.map((p) => p.bet);
 
     el.innerHTML = '';
 
+    const table = document.createElement('div');
+    table.className = 'pkr-table';
+
+    const oppRow = document.createElement('div');
+    oppRow.className = 'pkr-seat-row';
+    for (let i = 0; i < view.n; i++) {
+      if (i !== mySeat) oppRow.appendChild(seatEl(view, i, opts, { holeChanged, revealChanged }));
+    }
+    table.appendChild(oppRow);
+
+    const mid = document.createElement('div');
+    mid.className = 'pkr-mid';
+
     const board = document.createElement('div');
-    board.className = 'pkr-board' + (boardChanged ? '' : ' still');
+    board.className = 'pkr-board';
+    const newLen = view.board.length;
+    const dealAll = !boardChanged || newLen <= lastBoardLen;
     for (let i = 0; i < 5; i++) {
-      if (i < view.board.length) board.appendChild(cardEl(view.board[i]));
-      else {
+      if (i < newLen) {
+        const ce = cardEl(view.board[i]);
+        if (boardChanged && !dealAll && i >= lastBoardLen) {
+          ce.classList.add('pkr-flip');
+          if (ce.style && ce.style.setProperty) {
+            ce.style.setProperty('animation-delay', ((i - lastBoardLen) * .07) + 's');
+          }
+        } else if (!boardChanged) {
+          ce.classList.add('pkr-still');
+        }
+        board.appendChild(ce);
+      } else {
         const e = document.createElement('div');
         e.className = 'card-face pkr-empty';
         board.appendChild(e);
       }
     }
-    el.appendChild(board);
+    mid.appendChild(board);
 
     const pot = document.createElement('div');
     pot.className = 'pkr-pot';
-    pot.textContent = 'Pot: ' + view.pot;
-    el.appendChild(pot);
+    const disc = document.createElement('span');
+    disc.className = 'pkr-pot-disc' + (potKey !== lastPotKey ? ' pkr-pot-pop' : '');
+    const num = document.createElement('span');
+    num.className = 'pkr-pot-num';
+    num.textContent = view.pot;
+    disc.appendChild(num);
+    pot.appendChild(disc);
+    const plbl = document.createElement('span');
+    plbl.className = 'pkr-pot-lbl';
+    plbl.textContent = 'pot';
+    pot.appendChild(plbl);
+    mid.appendChild(pot);
 
-    if (me && me.hole && !me.folded) {
-      const row = document.createElement('div');
-      row.className = 'pkr-hole' + (holeChanged ? '' : ' still');
-      me.hole.forEach((c) => row.appendChild(cardEl(c)));
-      el.appendChild(row);
-    }
-
-    if (over && view.result.revealed) {
-      const row = document.createElement('div');
-      row.className = 'pkr-reveal' + (revealChanged ? '' : ' still');
-      for (const r of view.result.revealed) {
-        const lbl = document.createElement('span');
-        lbl.className = 'pkr-reveal-lbl';
-        lbl.textContent = sideName(String(r.seat)) + ': ';
-        row.appendChild(lbl);
-        r.hole.forEach((c) => row.appendChild(cardEl(c)));
-      }
-      el.appendChild(row);
-    }
+    table.appendChild(mid);
+    table.appendChild(seatEl(view, mySeat, opts, { holeChanged, revealChanged }));
+    el.appendChild(table);
 
     if (opts.interactive && !over && String(view.turn) === String(mySeat)) {
       el.appendChild(actionBar(view, opts));
     }
 
     lastBoardKey = boardKey; lastHoleKey = holeKey; lastRevealKey = revealKey;
+    lastBoardLen = newLen; lastPotKey = potKey; lastBets = betsArr;
   }
 
   function renderInfo(view, el, opts) {
@@ -573,26 +716,56 @@
   /* ---------- css (pkr- prefix) ---------- */
 
   const css = [
-    '.pkr-board{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:8px 0 14px}',
-    '.pkr-empty{opacity:.3;border-style:dashed;background:#fbfaf7}',
-    '.pkr-red .cf-corner,.pkr-red .cf-mid{color:#8e2f23}',
-    '.pkr-pot{text-align:center;font-weight:800;letter-spacing:.05em;margin-bottom:12px;color:#1c211e;font-size:15px}',
-    '.pkr-hole{display:flex;gap:10px;justify-content:center;margin-bottom:14px}',
-    '.pkr-reveal{display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin:12px 0}',
-    '.pkr-reveal-lbl{margin-left:14px;font-size:13px;font-weight:600;color:#79817a}',
-    '.pkr-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:16px;padding-top:14px;border-top:1px dashed #d3cdbd}',
-    '.pkr-actions .btn{border-radius:10px}',
-    '.pkr-fold{color:#a34433;border-color:#e3d0c9}',
-    '.pkr-call{color:#0d4a2b;font-weight:700;border-color:#cfe0d3}',
-    '.pkr-raise-input{width:78px;padding:8px 10px;border-radius:10px;border:1px solid #d3cdbd;background:#fbfaf7;color:inherit;font:inherit;text-align:center}',
+    '.pkr-table{width:min(100%,660px);margin:0 auto;border-radius:26px;padding:16px 14px 18px;',
+    'background:radial-gradient(130% 150% at 50% -10%, #1e6b43 0%, #16683f 48%, var(--green-deep) 100%);',
+    'border:1px solid #c9c2ae;box-shadow:var(--shadow-md), inset 0 2px 14px rgba(0,0,0,.3)}',
+    '.pkr-seat-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}',
+    '.pkr-seat{background:var(--surface-soft);border:1px solid var(--hair-strong);border-radius:14px;',
+    'padding:8px 10px;min-width:112px;text-align:center;box-shadow:var(--shadow-sm)}',
+    '.pkr-seat.me{margin:0 auto}',
+    '.pkr-seat.active{outline:2px solid #7fd6a4;outline-offset:1px;animation:turn-glow 1.6s ease-in-out infinite}',
+    '.pkr-seat.folded{opacity:.55}',
+    '.pkr-seat.winner{outline:2px solid var(--gold);outline-offset:1px}',
+    '.pkr-seat-head{display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:6px;min-height:18px}',
+    '.pkr-seat-name{font-size:12px;font-weight:700;color:var(--ink-soft);letter-spacing:.02em}',
+    '.pkr-dealer{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;',
+    'background:var(--gold);color:#fff;font-family:var(--font-display);font-size:11px;font-weight:700;',
+    'box-shadow:0 1px 3px rgba(28,33,30,.25)}',
+    '.pkr-blind{font-size:9px;font-weight:800;letter-spacing:.1em;color:#fff;background:rgba(0,0,0,.28);border-radius:6px;padding:1px 5px}',
+    '.pkr-seat-cards{display:flex;gap:6px;justify-content:center;align-items:center;min-height:52px;perspective:600px}',
+    '.pkr-seat.me .pkr-seat-cards{min-height:80px}',
+    '.pkr-dim{opacity:.4}',
+    '.pkr-seat-meta{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;min-height:18px}',
+    '.pkr-stack{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--ink)}',
+    '.pkr-bet{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:18px;padding:0 6px;border-radius:9px;',
+    'background:radial-gradient(120% 140% at 30% 20%, #d4a83f, #a87c15 78%);color:#fff;font-size:11px;font-weight:800;',
+    'box-shadow:0 1px 3px rgba(28,33,30,.3), inset 0 0 0 1px rgba(255,255,255,.28);animation:chip-in .28s var(--ease-out) both}',
+    '.pkr-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}',
+    '.pkr-tag.pkr-win{color:var(--gold);font-weight:800}',
+    '.pkr-mid{display:flex;flex-direction:column;align-items:center;gap:10px;margin:14px 0}',
+    '.pkr-board{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;perspective:600px}',
+    '.pkr-empty{opacity:.25;border-style:dashed;background:rgba(255,255,255,.5)}',
+    '.pkr-flip{animation:card-flip .42s var(--ease-spring) both;backface-visibility:hidden}',
+    '.pkr-still{animation:none !important}',
+    '.pkr-pot{display:flex;flex-direction:column;align-items:center;gap:3px}',
+    '.pkr-pot-disc{display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;',
+    'background:radial-gradient(120% 140% at 32% 22%, #d8ad4b, #a87c15 78%);',
+    'box-shadow:0 2px 6px rgba(0,0,0,.35), inset 0 0 0 2px rgba(255,255,255,.3), inset 0 0 0 5px rgba(120,85,15,.55)}',
+    '.pkr-pot-num{color:#fff;font-family:var(--font-display);font-weight:700;font-size:14px;text-shadow:0 1px 2px rgba(90,60,5,.5)}',
+    '.pkr-pot-lbl{font-size:9px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
+    '.pkr-pot-disc.pkr-pot-pop{animation:pot-pop .32s var(--ease-spring) both}',
     '.pkr-board .card-face:nth-child(2){animation-delay:.05s}',
     '.pkr-board .card-face:nth-child(3){animation-delay:.1s}',
     '.pkr-board .card-face:nth-child(4){animation-delay:.15s}',
     '.pkr-board .card-face:nth-child(5){animation-delay:.2s}',
-    '.pkr-hole .card-face:nth-child(2){animation-delay:.06s}',
-    '.pkr-board.still .card-face{animation:none}',
-    '.pkr-hole.still .card-face{animation:none}',
-    '.pkr-reveal.still .card-face{animation:none}'
+    '.pkr-red .cf-corner,.pkr-red .cf-mid{color:#8e2f23}',
+    '.pkr-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:16px;',
+    'padding-top:14px;border-top:1px dashed var(--hair-strong)}',
+    '.pkr-actions .btn{border-radius:10px}',
+    '.pkr-fold{color:var(--brick);border-color:#e3d0c9}',
+    '.pkr-call{color:var(--green-deep);font-weight:700;border-color:#cfe0d3}',
+    '.pkr-raise-range{width:130px;accent-color:var(--green);cursor:pointer}',
+    '.pkr-raise-btn{min-width:104px}'
   ].join('\n');
 
   const game = {
