@@ -14,9 +14,23 @@
   let selectedGame = null;   // game id on the setup screen
 
   /* ================= screens ================= */
+  // Screen depth order: forward moves (menu→setup→game) slide in from the
+  // right, back moves (any [data-back] / leave) slide in from the left.
+  const SCREEN_ORDER = { 'screen-menu': 0, 'screen-setup': 1, 'screen-connect': 1, 'screen-game': 2 };
   function show(id) {
-    document.querySelectorAll('.screen').forEach((s) =>
-      s.classList.toggle('hidden', s.id !== id));
+    let cur = null;
+    document.querySelectorAll('.screen').forEach((s) => {
+      if (!s.classList.contains('hidden')) cur = s.id;
+    });
+    const fwd = (SCREEN_ORDER[id] || 0) > (SCREEN_ORDER[cur] || -1);
+    document.querySelectorAll('.screen').forEach((s) => {
+      if (s.id === id) {
+        s.classList.remove('fwd', 'back');
+        void s.offsetWidth; // reflow: force the entry animation to restart
+        s.classList.add(fwd ? 'fwd' : 'back');
+      }
+      s.classList.toggle('hidden', s.id !== id);
+    });
     window.scrollTo(0, 0);
   }
   document.querySelectorAll('[data-back]').forEach((b) =>
