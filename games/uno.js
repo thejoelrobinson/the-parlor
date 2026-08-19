@@ -278,6 +278,28 @@
     return d;
   }
 
+  /* Motion gating — same feature gate as poker: card flights need real layout
+     geometry and rAF, neither of which the test stub provides, and
+     prefers-reduced-motion users should never see them. */
+  function motionOff() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) { return false; }
+  }
+
+  function canFly() {
+    if (typeof window.requestAnimationFrame !== 'function') return false;
+    if (motionOff()) return false;
+    return typeof document.createElement('div').getBoundingClientRect === 'function';
+  }
+
+  /* ghost card for in-flight cards — a real card that travels, then fades */
+  function flyCardEl(card, isBack) {
+    const g = cardEl(card, isBack);
+    g.className += ' uno-flycard';
+    return g;
+  }
+
   /* One-shot deal animations: render() rebuilds everything, so without a
      guard every re-render would replay the card-deal animation. These keys
      live in the closure and mark which areas' contents actually changed —
@@ -290,6 +312,7 @@
    let lastOneArr = null;   // per-seat count===1 — fires the UNO! burst + badge pop once
    let lastSuitKey = '';    // currentSuit — fires the suit beat on change
    let lastDirKey = 1;      // play direction — fires the direction spin on flip
+   let lastCountsArr = null; // per-seat count snapshot — detects who drew (count grew)
 
   function render(view, el, opts) {
     const mySide = opts.mySide;
@@ -315,42 +338,21 @@
     const wrap = document.createElement('div');
     wrap.className = 'uno-wrap';
 
-    /* opponents (in play order) */
-    const opp = document.createElement('div');
-    opp.className = 'uno-opp' + (countsChanged ? '' : ' still');
-    for (let s = 0; s < view.players; s++) {
-      if (s === me) continue;
-      const cell = document.createElement('div');
-      cell.className = 'uno-oppcell' + (view.turn === s ? ' active' : '') + (view.counts[s] === 1 ? ' one' : '');
-      const nm = document.createElement('div');
-      nm.className = 'uno-oppname';
-      nm.textContent = s === me ? '' : 'P' + (s + 1) + ' · ' + view.counts[s];
-      cell.appendChild(nm);
-      if (view.counts[s] === 1) {
-        const justOne = !!(lastOneArr && !lastOneArr[s]);
-        const badge = document.createElement('span');
-        badge.className = 'uno-one' + (justOne ? ' pop' : '');
-        badge.textContent = '1';
-        cell.appendChild(badge);
-        if (justOne) {
-          const burst = document.createElement('span');
-          burst.className = 'uno-burst';
-          burst.textContent = 'UNO!';
-          cell.appendChild(burst);
-        }
-      }
-      const backs = document.createElement('div');
-      backs.className = 'uno-backs';
-      const n = Math.min(view.counts[s], 7);
-      for (let k = 0; k < n; k++) backs.appendChild(cardEl(null, true));
-      cell.appendChild(backs);
-      opp.appendChild(cell);
-    }
-    wrap.appendChild(opp);
+    /* table: red felt oval with the deck and discard in the middle; every
+       player sits around it, keyed by offset from my seat — 0 = me (bottom),
+       then clockwise 1 = left, 2 = top, 3 = right. With three players the
+       top seat splits into a top-left / top-right pair (.trio). */
+    const table = document.createElement('div');
+    table.className = 'uno-table' + (view.players === 3 ? ' trio' : '');
+    const feltEl = document.createElement('div');
+    feltEl.className = 'uno-felt';
+    table.appendChild(feltEl);
 
     /* middle: deck, discard, suit/direction */
     const mid = document.createElement('div');
     mid.className = 'uno-mid';
+    const piles = document.createElement('div');
+    piles.className = 'uno-piles';
     const deckKey = view.deckCount + ':' + (view.canDrawNow ? 1 : 0);
     const deckSpin = view.deckCount === 0 && view.canDrawNow && deckKey !== lastDeckKey;
     const deckDealt = !deckSpin && lastDeckCount >= 0 && view.deckCount < lastDeckCount;
@@ -366,7 +368,7 @@
     dcnt.className = 'cnt';
     dcnt.textContent = view.deckCount;
     deckPile.appendChild(dcnt);
-    mid.appendChild(deckPile);
+    piles.appendChild(deckPile);
 
     const noteKey = view.last
       ? view.last.seat + ':' + view.last.text + ':' + view.discardCount + ':' + view.counts.join(',')
@@ -379,7 +381,10 @@
     under.className += ' uno-under';
     discPile.appendChild(under);
     const topCard = cardEl(view.top, false);
-    if (topChanged) topCard.classList.add(view.last && view.last.seat === me ? 'playin-mine' : 'playin-opp');
+    if (topChanged) {
+      topCard.classList.add('topin');
+      if (canFly() && view.last) topCard.classList.add('late');
+    }
     discPile.appendChild(topCard);
     if (view.last && noteChanged) {
       const note = document.createElement('div');
@@ -391,7 +396,7 @@
     scnt.className = 'cnt';
     scnt.textContent = view.discardCount - 1;
     discPile.appendChild(scnt);
-    mid.appendChild(discPile);
+    piles.appendChild(discPile);
 
     const info = document.createElement('div');
     info.className = 'uno-info';
@@ -399,8 +404,43 @@
     info.innerHTML = '<div class="uno-suitrow">Suit: <b class="uno-suit-' + view.currentSuit + (suitChanged ? ' uno-suitbeat' : '') + '">' + SUITNAME[view.currentSuit] + '</b></div>' +
       '<div class="uno-dirrow"><span class="uno-dir' + (dirCcw ? ' ccw' : '') + (dirChanged ? ' dirbeat' : '') + '">' + (dirCcw ? '↺' : '↻') + '</span> ' + (dirCcw ? 'counter' : 'clockwise') + '</div>' +
       (view.drew ? '<div class="uno-hint">You drew — play it or pass.</div>' : '');
+    mid.appendChild(piles);
     mid.appendChild(info);
-    wrap.appendChild(mid);
+    table.appendChild(mid);
+
+    /* seats, one per player (mine included — the fanned hand below is the
+       interactive copy, the seat shows who holds what and whose turn it is) */
+    const seatEls = new Array(view.players);
+    for (let s = 0; s < view.players; s++) {
+      const off = (s - me + view.players * 4) % view.players;
+      const cell = document.createElement('div');
+      cell.className = 'uno-pos uno-pos' + off + ' uno-oppcell' + (view.turn === s ? ' active' : '') + (view.counts[s] === 1 ? ' one' : '') + (countsChanged ? '' : ' still');
+      const nm = document.createElement('div');
+      nm.className = 'uno-oppname';
+      nm.textContent = (s === me ? 'You · ' : 'P' + (s + 1) + ' · ') + view.counts[s];
+      cell.appendChild(nm);
+      if (view.counts[s] === 1) {
+        const justOne = !!(lastOneArr && !lastOneArr[s]);
+        const badge = document.createElement('span');
+        badge.className = 'uno-one' + (justOne ? ' pop' : '');
+        badge.textContent = '1';
+        cell.appendChild(badge);
+        if (justOne && s !== me) {
+          const burst = document.createElement('span');
+          burst.className = 'uno-burst';
+          burst.textContent = 'UNO!';
+          cell.appendChild(burst);
+        }
+      }
+      const backs = document.createElement('div');
+      backs.className = 'uno-backs';
+      const n = Math.min(view.counts[s], 7);
+      for (let k = 0; k < n; k++) backs.appendChild(cardEl(null, true));
+      cell.appendChild(backs);
+      seatEls[s] = cell;
+      table.appendChild(cell);
+    }
+    wrap.appendChild(table);
 
     /* my hand — fanned arc; only genuinely new cards animate */
     let handMode = 'still'; // still | full (fresh deal) | drawn (one card appended)
@@ -487,6 +527,41 @@
     wrap.appendChild(act);
     el.appendChild(wrap);
 
+    /* --- card flights: a played card flies from the acting seat to the
+       discard; a drawn card flies from the deck to the seat that drew it
+       (or into my hand). Gated by canFly() so the test stub and
+       reduced-motion never touch layout geometry; on the very first
+       render (no previous state) there is nothing to fly. --- */
+    if (canFly()) {
+      function flyCard(tbl, src, dst, node, w, h, delay, dur) {
+        const tr = tbl.getBoundingClientRect();
+        node.style.left = (src.left + src.width / 2 - tr.left) + 'px';
+        node.style.top = (src.top + src.height / 2 - tr.top) + 'px';
+        node.style.margin = (-(h / 2)) + 'px 0 0 ' + (-(w / 2)) + 'px';
+        tbl.appendChild(node);
+        const dx = dst.left + dst.width / 2 - (src.left + src.width / 2);
+        const dy = dst.top + dst.height / 2 - (src.top + src.height / 2);
+        setTimeout(() => {
+          requestAnimationFrame(() => {
+            node.style.transition = 'transform ' + dur + 's var(--ease-out), opacity .18s ease-out ' + (dur - .2) + 's';
+            node.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(.85)';
+            node.style.opacity = '0';
+          });
+        }, delay * 1000);
+        setTimeout(() => { if (node.parentNode) node.parentNode.removeChild(node); }, (delay + dur + .35) * 1000);
+      }
+      if (topChanged && view.last) {
+        flyCard(table, seatEls[view.last.seat].getBoundingClientRect(), discPile.getBoundingClientRect(), flyCardEl(view.top, false), 44, 64, 0, .42);
+      }
+      for (let s = 0; s < view.players; s++) {
+        const grew = lastCountsArr ? view.counts[s] - lastCountsArr[s] : 0;
+        for (let k = 0; k < Math.min(grew, 2); k++) {
+          const dst = (s === me ? handRow.children[myHand.length - 1] : seatEls[s]).getBoundingClientRect();
+          flyCard(table, deckPile.getBoundingClientRect(), dst, flyCardEl(null, true), 34, 48, k * .09, .4);
+        }
+      }
+    }
+
     lastHandKey = handKey; lastTopKey = topKey; lastCountKey = countKey;
     lastHandArr = myHand.map((c) => (c ? { suit: c.suit, v: c.v } : null));
     lastDeckKey = deckKey;
@@ -495,6 +570,7 @@
     lastOneArr = oneArr;
     lastSuitKey = view.currentSuit;
     lastDirKey = view.dir;
+    lastCountsArr = view.counts.slice();
   }
 
   function renderInfo(view, el, opts) {
@@ -515,9 +591,18 @@
 
   const css = [
     '.uno-wrap{display:flex;flex-direction:column;gap:14px;width:min(94vw,640px);margin:0 auto}',
-    '.uno-opp{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}',
-    '.uno-oppcell{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 14px;border-radius:14px;background:#faf9f5;border:1px solid #e4e0d4;transition:border-color .2s, background .2s, box-shadow .2s}',
-    '.uno-oppcell.active{border-color:#16683f;background:#e9f1ea;box-shadow:inset 0 0 0 1px #16683f;animation:turn-glow 1.6s ease-in-out infinite}',
+    '.uno-table{width:min(100%,640px);height:430px;margin:0 auto;border-radius:26px;position:relative;overflow:visible;background:radial-gradient(120% 140% at 50% 0%, #2b2622 0%, #211d1a 55%, #181512 100%);border:1px solid #c9c2ae;box-shadow:var(--shadow-md)}',
+    '.uno-felt{position:absolute;left:12%;right:12%;top:13%;bottom:13%;border-radius:50%;background:radial-gradient(120% 130% at 50% 22%, #b04a38 0%, #a34433 52%, #6f2718 100%);border:9px solid #5e4327;box-shadow:0 8px 22px rgba(0,0,0,.35), inset 0 0 30px rgba(0,0,0,.4), inset 0 2px 6px rgba(255,255,255,.08)}',
+    '.uno-pos{position:absolute;z-index:5;display:flex;justify-content:center;transform:translateY(-50%)}',
+    '.uno-pos0{left:50%;bottom:0;top:auto;margin-left:-74px;width:148px;transform:none}',
+    '.uno-pos1{left:0;top:50%;width:150px}',
+    '.uno-pos2{left:50%;top:0;margin-left:-74px;width:148px;transform:none}',
+    '.uno-pos3{right:0;top:50%;width:150px}',
+    '.trio .uno-pos1{left:4%;top:10%;width:148px;transform:none}',
+    '.trio .uno-pos2{left:auto;right:4%;top:10%;width:148px;margin-left:0;transform:none}',
+    '.uno-oppcell{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 14px;border-radius:14px;background:var(--surface);border:1px solid var(--hair-strong);box-shadow:0 3px 10px rgba(0,0,0,.35)}',
+    '.uno-oppcell.active{border-color:#ffd97a;animation:uno-turn-glow 1.6s ease-in-out infinite}',
+    '@keyframes uno-turn-glow{0%,100%{box-shadow:0 3px 10px rgba(0,0,0,.35), 0 0 0 0 rgba(255,217,122,0)}50%{box-shadow:0 3px 10px rgba(0,0,0,.35), 0 0 0 7px rgba(255,217,122,.25)}}',
     '.uno-oppcell.one{border-color:var(--gold);background:var(--gold-soft);box-shadow:inset 0 0 0 1px var(--gold)}',
     '.uno-one{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;background:var(--gold);color:#fff;font-family:var(--font-display);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(28,33,30,.3);animation:pill-pulse .9s ease-in-out infinite}',
     '.uno-one.pop{animation:uno-badge-pop .45s var(--ease-spring) both, pill-pulse .9s ease-in-out .55s infinite}',
@@ -530,8 +615,11 @@
     '.uno-dir.ccw.dirbeat{animation:dir-spin 9s linear infinite reverse, uno-dirbeat .55s var(--ease-spring)}',
     '@keyframes uno-dirbeat{from{transform:rotate(360deg)}to{transform:rotate(0)}}',
     '.uno-oppname{font-size:12px;font-weight:600;color:#5c6560;letter-spacing:.02em}',
-    '.uno-backs{display:flex;gap:3px}',
-    '.uno-mid{display:flex;align-items:center;justify-content:center;gap:22px}',
+    '.uno-backs{display:flex}',
+    '.uno-oppcell .uno-backs .uno-card{width:28px;height:40px;border-radius:7px;margin-left:-11px}',
+    '.uno-oppcell .uno-backs .uno-card:first-child{margin-left:0}',
+    '.uno-mid{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:8px;max-width:92%}',
+    '.uno-piles{display:flex;align-items:center;justify-content:center;gap:26px}',
     '.uno-pile{position:relative;perspective:420px}',
     '.uno-pile.still .uno-card{animation:none}',
     '.uno-deck{display:grid;place-items:center;width:56px;height:80px}',
@@ -546,10 +634,11 @@
     '.uno-under{transform:translate(-4px,-5px) rotate(-5deg);opacity:.75;animation:none}',
     '.uno-disc .uno-card:not(.uno-under){z-index:1}',
     '.uno-note{position:absolute;top:-24px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:12px;font-weight:700;letter-spacing:.02em;color:#f7f2e5;background:#232836;padding:3px 11px;border-radius:999px;box-shadow:0 2px 6px rgba(28,33,30,.3);pointer-events:none;z-index:6;animation:note-fade 1.6s var(--ease-out) both}',
-    '.uno-opp.still .uno-card{animation:none}',
+    '.uno-pos.still .uno-card{animation:none}',
     '.uno-hand.still .uno-card{animation:none}',
-    '.uno-card.playin-mine{animation:uno-play-mine .55s var(--ease-glide) both}',
-    '.uno-card.playin-opp{animation:uno-play-opp .5s var(--ease-glide) both}',
+    '.uno-disc .uno-card.topin{animation:uno-topin .18s ease both}',
+    '.uno-disc .uno-card.topin.late{animation-delay:.34s}',
+    '@keyframes uno-topin{from{opacity:0;transform:scale(.86)}to{opacity:1;transform:none}}',
     '.uno-pile .cnt{position:absolute;bottom:-8px;right:-8px;font-size:11.5px;font-weight:700;background:#fff;border:1px solid #d3cdbd;border-radius:999px;padding:1px 8px;color:#47514b;box-shadow:0 1px 3px rgba(28,33,30,.12)}',
     '.uno-info{font-size:13px;line-height:1.65;color:#47514b}',
     '.uno-dirrow{display:flex;align-items:center;gap:6px}',
@@ -561,6 +650,7 @@
     '.uno-hand .uno-card:first-child{margin-left:0}',
     '.uno-still{animation:none !important}',
     '.uno-card{position:relative;width:52px;height:74px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#20242e;box-shadow:0 3px 8px rgba(28,33,30,.28);flex:0 0 auto;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1));animation:uno-deal .3s var(--ease-out) both;transition:transform .32s var(--ease-glide)}',
+    '.uno-flycard{animation:none;width:44px;height:64px;position:absolute;left:0;top:0;z-index:60;pointer-events:none;box-shadow:0 4px 10px rgba(28,33,30,.4)}',
     '.uno-card::before{content:"";position:absolute;inset:0;border-radius:11px;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -3px 8px rgba(0,0,0,.28);pointer-events:none}',
     '.uno-oval{position:absolute;inset:19% 7%;background:#f7f2e5;border-radius:50%;transform:rotate(-16deg);box-shadow:inset 0 0 0 1.5px rgba(28,33,30,.14)}',
     '.uno-val{position:relative;z-index:1;font-family:var(--font-display);font-weight:900;font-size:25px;line-height:1;color:#fff;transform:rotate(-16deg);user-select:none}',
@@ -603,7 +693,7 @@
     '.uno-card.pend{outline:3px solid #fff;box-shadow:0 0 0 5px rgba(22,104,63,.5), 0 4px 12px rgba(28,33,30,.3);transform:translateY(-16px) scale(1.07) rotate(0);z-index:50}',
     '.uno-card.last{outline:3px solid var(--gold);animation:uno-last-pulse 1.2s ease-in-out infinite}',
     '@keyframes uno-last-pulse{0%,100%{box-shadow:0 2px 6px rgba(28,33,30,.22), 0 0 0 0 rgba(194,147,48,0)}50%{box-shadow:0 2px 6px rgba(28,33,30,.22), 0 0 0 9px rgba(194,147,48,.4)}}',
-    '.uno-card.drawn{animation:uno-drawfly .6s var(--ease-glide) both;animation-delay:.06s}',
+    '.uno-card.drawn{animation:uno-drawin .45s var(--ease-out) both;animation-delay:.1s}',
     '.uno-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;min-height:38px}',
     '.uno-suitbtn{font-weight:800;border-radius:10px;padding:9px 18px;color:#fff;border:none;cursor:pointer;letter-spacing:.03em;box-shadow:0 3px 0 rgba(0,0,0,.25);transition:transform .1s, box-shadow .1s, filter .15s}',
     '.uno-suitbtn.suitin{animation:entry-in .32s var(--ease-spring) backwards}',
@@ -611,11 +701,10 @@
     '.uno-suitbtn:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.25)}',
     '.uno-suitbtn-r{background:#7f2a1c}.uno-suitbtn-y{background:#9c7415}.uno-suitbtn-g{background:#1e5634}.uno-suitbtn-b{background:#2a466e}',
     '.uno-hint{color:#8a6a1f;font-weight:600}',
-    '@keyframes uno-play-mine{0%{opacity:0;transform:translate(40px,320px) rotate(20deg) scale(.7)}55%{opacity:1;transform:translate(12px,110px) rotate(6deg) scale(.92)}80%{transform:translate(-4px,-8px) rotate(-1.5deg) scale(1.05)}100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}}',
-    '@keyframes uno-play-opp{0%{opacity:0;transform:translate(0,-320px) rotate(-18deg) scale(.7)}55%{opacity:1;transform:translate(0,-110px) rotate(-5deg) scale(.93)}80%{transform:translate(0,10px) rotate(1.5deg) scale(1.05)}100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)}}',
-    '@keyframes uno-drawfly{0%{opacity:0;transform:translate(-230px,-300px) rotate(-14deg) scale(.6)}60%{opacity:1;transform:translate(-80px,-120px) rotate(-5deg) scale(.9)}100%{opacity:1;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1)) scale(1)}}',
+    '@keyframes uno-drawin{0%{opacity:0;transform:translate(-46px,-70px) rotate(-14deg) scale(.7)}100%{opacity:1;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1)) scale(1)}}',
     '@keyframes note-fade{0%{opacity:0;transform:translate(-50%,8px)}12%{opacity:1;transform:translate(-50%,0)}72%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,-10px)}}',
-    '@keyframes deck-pop{0%{transform:scale(.8)}60%{transform:scale(1.1)}100%{transform:scale(1)}}'
+    '@keyframes deck-pop{0%{transform:scale(.8)}60%{transform:scale(1.1)}100%{transform:scale(1)}}',
+    '@media(max-width:520px){.uno-table{height:380px;border-radius:20px}.uno-mid{transform:translate(-50%,-50%) scale(.85)}.uno-pos0,.uno-pos2{width:124px;margin-left:-62px}.uno-pos1,.uno-pos3{width:122px}.uno-oppcell .uno-backs .uno-card{width:24px;height:34px;margin-left:-9px}}'
   ].join('\n');
 
   const game = {
