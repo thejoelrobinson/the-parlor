@@ -206,7 +206,8 @@
     const b = view.board;
 
     if (!interactive) el.__sel = -1;
-    const sel = el.__sel || -1;
+    const getSel = () => (typeof el.__sel === 'number' ? el.__sel : -1);
+    const sel = getSel();
 
     el.innerHTML = '';
     const boardEl = document.createElement('div');
@@ -248,11 +249,12 @@
     el.appendChild(boardEl);
 
     function paint() {
+      const s0 = getSel();
       boardEl.querySelectorAll('.sel,.tgt').forEach((x) => x.classList.remove('sel', 'tgt'));
-      if (sel >= 0) {
-        const s = boardEl.querySelector('[data-i="' + sel + '"]');
+      if (s0 >= 0) {
+        const s = boardEl.querySelector('[data-i="' + s0 + '"]');
         if (s) s.classList.add('sel');
-        (targets[sel] || []).forEach((m) => {
+        (targets[s0] || []).forEach((m) => {
           const t = boardEl.querySelector('[data-i="' + m.to + '"]');
           if (t) t.classList.add('tgt');
         });
@@ -261,12 +263,13 @@
 
     function onSquare(i) {
       if (!interactive) return;
+      const s0 = getSel();
       const p = b[i];
       const own = !!p && p.c === mySide;
-      if (sel === i) { el.__sel = -1; paint(); return; }
+      if (s0 === i) { el.__sel = -1; paint(); return; }
       if (own) { el.__sel = i; paint(); return; }
-      if (sel >= 0 && targets[sel]) {
-        const cands = targets[sel].filter((m) => m.to === i);
+      if (s0 >= 0 && targets[s0]) {
+        const cands = targets[s0].filter((m) => m.to === i);
         if (cands.length) { el.__sel = -1; onMove(cands[0]); return; }
       }
       el.__sel = -1;
