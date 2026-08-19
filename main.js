@@ -12,6 +12,7 @@
 
   let S = null;              // active session
   let selectedGame = null;   // game id on the setup screen
+  let lastPillKey = '';      // turn-pill className+text; re-pulses on change
 
   /* ================= screens ================= */
   // Screen depth order: forward moves (menu→setup→game) slide in from the
@@ -192,6 +193,7 @@
     $('#chat-log').innerHTML = '';
     $('#chat-box').classList.toggle('hidden', mode === 'local');
     $('#game-title').textContent = g.title;
+    $('#game-hint').textContent = g.hint || '';
 
     if (mode === 'local' || mode === 'p2p-host') {
       S.state = g.newState(S.configs);
@@ -252,6 +254,13 @@
     else if (S.mode === 'local') { pill.textContent = 'Computer is thinking'; pill.className = 'pill wait'; }
     else if (S.mode === 'p2p-host') { pill.textContent = 'Waiting for your opponent'; pill.className = 'pill wait'; }
     else { pill.textContent = 'Waiting for the host'; pill.className = 'pill wait'; }
+    const pillKey = pill.className + '|' + pill.textContent;
+    if (pillKey !== lastPillKey) {
+      lastPillKey = pillKey;
+      pill.classList.remove('pill-pop');
+      void pill.offsetWidth; // reflow: restart the pulse
+      pill.classList.add('pill-pop');
+    }
 
     g.render(view, $('#board'), {
       mySide: S.mySide,
@@ -467,6 +476,7 @@
     div.appendChild(b);
     div.appendChild(document.createTextNode(text));
     el.appendChild(div);
+    while (el.children.length > 100) el.removeChild(el.children[0]);
     el.scrollTop = el.scrollHeight;
   }
   function sendChat() {
@@ -487,6 +497,7 @@
     div.className = 'entry';
     div.textContent = text;
     el.appendChild(div);
+    while (el.children.length > 80) el.removeChild(el.children[0]);
     el.scrollTop = el.scrollHeight;
   }
 

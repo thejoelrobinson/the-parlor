@@ -409,6 +409,15 @@ textarea:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3p
 }
 .foot b { color: var(--ink-soft); font-weight: 600; }
 
+/* ---------- game screen hint + turn-pill pulse ---------- */
+#game-hint { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); }
+@keyframes pill-pop {
+  0% { transform: scale(.94); }
+  55% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+.pill.pill-pop { animation: pill-pop .3s var(--ease-out); }
+
 /* ---------- accessibility: respect reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

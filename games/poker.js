@@ -772,6 +772,7 @@
     id: 'poker',
     title: 'Poker',
     blurb: 'Texas Hold\'em: blinds, betting rounds, side pots, and showdown. Bluff if you dare.',
+    hint: 'Act when your seat glows: fold, check, call, or raise.',
     sideList: ['0', '1', '2', '3'],
     pickSide: false,
     sideName,

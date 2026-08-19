@@ -698,6 +698,7 @@
     id: 'chess',
     title: 'Chess',
     blurb: 'The classic. Full rules: castling, en passant, promotions, draw detection.',
+    hint: 'Select a piece to see its legal moves, then click a highlighted square.',
     sideList: ['white', 'black'],
     pickSide: true,
     sideName(side) { return side === 'white' ? 'White' : 'Black'; },

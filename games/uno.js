@@ -591,6 +591,7 @@
     id: 'uno',
     title: 'UNO',
     blurb: 'The classic card game — 2 to 4 players, wilds, +2, skip and reverse.',
+    hint: "Play a card matching the top card's color or value — or draw.",
     sideList: ['0', '1', '2', '3'],
     pickSide: false,
     sideName(side) { return 'Player ' + (parseInt(side, 10) + 1); },

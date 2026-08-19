@@ -180,6 +180,7 @@ add(body, mk('div', 'connect-status'));
 // game screen
 add(body, mk('div', 'game-title'));
 add(body, mk('div', 'turn-pill', 'pill'));
+add(body, mk('div', 'game-hint'));
 add(body, mk('button', 'btn-rematch', 'btn'));
 add(body, mk('button', 'btn-leave', 'btn'));
 add(body, mk('div', 'board'));

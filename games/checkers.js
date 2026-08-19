@@ -476,6 +476,7 @@
     id: 'checkers',
     title: 'Checkers',
     blurb: 'Mandatory captures, multi-jumps, crowning. Red moves first.',
+    hint: 'Click a disc, then a highlighted square. Captures are forced.',
     sideList: ['red', 'black'],
     pickSide: true,
     sideName(side) { return side === 'red' ? 'Red' : 'Black'; },
