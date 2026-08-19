@@ -325,9 +325,9 @@
 
   /* ---------- results / rematch / leave ---------- */
   /* Result icons reuse the menu-card motif marks (editorial ink, no emoji):
-     the serif glyph, the disc pair, the four-ink dots. */
+     the SVG pawn, the serif glyph, the disc pair, the four-ink dots. */
   const RESULT_ICON = {
-    chess: '<span class="gicon-glyph">\u265e</span>',
+    chess: '<svg class="gicon-pawn" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><circle cx="32" cy="14" r="9.5"/><path d="M27 21.5h10v5H27z"/><rect x="19.5" y="26.5" width="25" height="6" rx="3"/><path d="M24.5 32.5 17.5 52h29L39.5 32.5z"/><rect x="12.5" y="54" width="39" height="8" rx="3.5"/></svg>',
     checkers: '<span class="gicon-discs"><i></i><i></i></span>',
     uno: '<span class="gicon-dots"><i></i><i></i><i></i><i></i></span>',
     poker: '<span class="gicon-glyph">\u2660</span>'

@@ -119,7 +119,8 @@ main { max-width: 1120px; margin: 0 auto; padding: 10px 20px 70px; }
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
   font-family: var(--font-display); font-weight: 600; font-size: 21px; letter-spacing: -.01em;
 }
-.brand-mark { color: var(--gold); font-size: 19px; display: inline-block; transform: translateY(1px); }
+.brand-mark { color: var(--gold); display: inline-flex; transform: translateY(1px); }
+.brand-mark svg { width: 15px; height: 15px; display: block; }
 .brand .sub {
   flex-basis: 100%; order: 3; margin-top: 1px;
   font: 500 12.5px/1.4 var(--font-ui); color: var(--muted); letter-spacing: 0;
@@ -191,7 +192,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 10px 20px 70px; }
 .gcard:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--hair-strong); }
 .gcard:active { transform: translateY(-1px); }
 /* icon motifs — one plate per game, ink on deep paper:
-   serif glyph (chess, poker), disc pair (checkers), four-ink dots (UNO) */
+   SVG pawn (chess), serif glyph (poker), disc pair (checkers), four-ink dots (UNO) */
 .gicon {
   width: 54px; height: 54px; border-radius: 16px; margin-bottom: 16px;
   display: flex; align-items: center; justify-content: center;
@@ -203,6 +204,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 10px 20px 70px; }
 .gicon-glyph {
   font-family: var(--font-display); font-weight: 600; font-size: 30px; line-height: 1;
 }
+.gicon-pawn { width: 34px; height: 34px; display: block; }
 .gicon-discs { position: relative; width: 36px; height: 26px; }
 .gicon-discs i {
   position: absolute; top: 0; width: 26px; height: 26px; border-radius: 50%;
@@ -333,6 +335,7 @@ textarea:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3p
 }
 /* motif marks, scaled up for the result card */
 .overlay-icon .gicon-glyph { font-size: 54px; }
+.overlay-icon .gicon-pawn { width: 54px; height: 54px; }
 .overlay-icon .gicon-discs { transform: scale(1.5); margin: 14px 0; }
 .overlay-icon .gicon-dots { transform: scale(1.35); margin: 10px 0; }
 .overlay-fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
