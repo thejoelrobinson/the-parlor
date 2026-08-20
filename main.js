@@ -13,6 +13,35 @@
   let S = null;              // active session
   let selectedGame = null;   // game id on the setup screen
   let lastPillKey = '';      // turn-pill className+text; re-pulses on change
+  let botTimer = null;       // pending CPU move; cleared before rescheduling and on leave
+
+  /* ---------- audio & FX (window.AUDIO / window.FX from fx/, see CONTRACT.md) ----------
+   * The fx modules may be missing (e.g. the Node click-test does not load
+   * them), so every call is guarded. Game render() emits presentation events
+   * on el.__events; pumpEvents() turns them into SFX + particles locally on
+   * both P2P sides — no new message types. */
+  const A = window.AUDIO;
+  const F = window.FX;
+  let boardFxLayer = null;   // FX particle layer on #board for the active session
+  let overlayFxLayer = null; // FX layer on #overlay-fx for result fanfare
+  let audioUnlocked = false; // Web Audio may only start after a user gesture
+  let lastTurnSide = null;   // side to move on the previous render (drives the turn tick)
+  let pumpedResult = false;  // true while the last pump played a mate/draw board sting
+  let irisDone = false;      // this session's first board render already iris-revealed
+  let lastRenderOver = false; // outcome().over on the previous render (rematch detection)
+
+  function fxOn() { return !!F && typeof F.enabled === 'function' && F.enabled(); }
+
+  // First pointer/click anywhere: unlock audio (autoplay policy), then let the
+  // menu music in a beat later. Idempotent; a no-op in the Node click-test.
+  function unlockAudio() {
+    if (audioUnlocked || !A || typeof A.ensure !== 'function') return;
+    audioUnlocked = true;
+    A.ensure();
+    window.setTimeout(() => { if (A && !S) A.music.start('menu'); }, 300);
+  }
+  document.addEventListener('pointerdown', unlockAudio, { once: true });
+  document.addEventListener('click', unlockAudio, { once: true });
 
   /* ================= screens ================= */
   // Screen depth order: forward moves (menu→setup→game) slide in from the
@@ -155,6 +184,7 @@
   $('#copy-answer').addEventListener('click', () => copyText($('#copy-answer'), $('#answer-out')));
 
   P2P.onOpen = () => {
+    if (A && A.play) A.play('connect');
     if (selectedGame && !S) {
       const g = Games[selectedGame];
       const mode = P2P.role === 'host' ? 'p2p-host' : 'p2p-guest';
@@ -163,6 +193,7 @@
     }
   };
   P2P.onFail = (msg) => {
+    if (A && A.play) A.play('disconnect');
     if (S) { setConn(null); addLog('✕ ' + msg); }
     else setConnectStatus('✕ ' + msg);
   };
@@ -181,6 +212,19 @@
     return side === '0' ? '1' : '0'; // seated games in P2P: seats 0 and 1
   }
 
+  /* ---------- board iris reveal (game start / rematch / next hand) ----------
+   * One-shot clip-path wipe on #board. Cleanup is timeout-based rather than
+   * animationend, because piece-level animationend events bubble up to the
+   * board and would cut the wipe short. No-op in the Node click-test. */
+  function irisBoard() {
+    const b = $('#board');
+    if (!b || !b.classList) return;
+    b.classList.remove('iris-in');
+    void b.offsetWidth; // reflow: lets a quick re-trigger restart the wipe
+    b.classList.add('iris-in');
+    setTimeout(() => { if (b.classList.contains('iris-in')) b.classList.remove('iris-in'); }, 1400);
+  }
+
   function startSession(gameId, mode, mySide) {
     const g = Games[gameId];
     S = {
@@ -194,6 +238,14 @@
     $('#chat-box').classList.toggle('hidden', mode === 'local');
     $('#game-title').textContent = g.title;
     $('#game-hint').textContent = g.hint || '';
+
+    // presentation: attach the FX particle layer to the board and start this
+    // game's music scene (stops whatever was playing first).
+    boardFxLayer = F && F.attach ? (F.attach($('#board')) || null) : null;
+    if (A && A.music) { A.music.stop(); A.music.start(gameId); }
+    lastTurnSide = null;
+    irisDone = false;      // first rendered board this session gets the iris reveal
+    lastRenderOver = false; // ...and no "finished→alive" transition is pending
 
     if (mode === 'local' || mode === 'p2p-host') {
       S.state = g.newState(S.configs);
@@ -226,6 +278,84 @@
     }
   }
 
+  /* ---------- game-event pump (P2P-safe FX; see CONTRACT.md) ----------
+   * A game's render() diffs its own view and records {t, el?, x?, y?, n?}
+   * events on el.__events. After every render we play the matching SFX + FX.
+   * Both P2P peers diff the same state, so both fire identical FX locally —
+   * no new message types are needed. Unknown event types pass their name
+   * through as the SFX (additive, never throws). */
+  const FX_EVENTS = {
+    // event t -> { sfx, fx (particle kind), n (count), shake (board size) }
+    move:      { sfx: 'move' },
+    castle:    { sfx: 'move' },
+    capture:   { sfx: 'capture', fx: 'spark', shake: 'sm' },
+    check:     { sfx: 'check', fx: 'ring' },
+    mate:      { sfx: 'mate', shake: 'lg' },
+    promo:     { sfx: 'promo', fx: 'goldrain' },
+    crown:     { sfx: 'crown', fx: 'goldrain' },
+    multijump: { sfx: 'capture', fx: 'spark', shake: 'md' },
+    draw:      { sfx: 'draw' },
+    deal:      { sfx: 'deal', fx: 'dust' },
+    draw1:     { sfx: 'draw1', fx: 'dust' },
+    draw2:     { sfx: 'draw1', fx: 'dust' },
+    play:      { sfx: 'flip', fx: 'spark' },
+    flip:      { sfx: 'flip' },
+    wild:      { sfx: 'wild', fx: 'confetti', n: 36 },
+    shuffle:   { sfx: 'shuffle', fx: 'dust' },
+    uno:       { sfx: 'uno', fx: 'ring', shake: 'sm' },
+    bet:       { sfx: 'chip', fx: 'spark' },
+    fold:      { sfx: 'fold', fx: 'smoke' },
+    allin:     { sfx: 'allin', fx: 'sweep' },
+    phase:     { sfx: 'tick' },
+    showdown:  { sfx: null, fx: 'sweep' }, // silent sweep: the overlay fanfare carries the sound
+    click:     { sfx: 'click' }
+  };
+
+  function pumpEvents(boardEl) {
+    pumpedResult = false; // cleared every pump; set again only by mate/draw
+    const evs = boardEl && boardEl.__events;
+    if (!evs || !evs.length) return;
+    boardEl.__events = []; // consumed — the next render starts a fresh diff
+    const layer = boardFxLayer;
+    for (const ev of evs) {
+      if (!ev || !ev.t) continue;
+      const def = FX_EVENTS[ev.t] || { sfx: ev.t };
+      if (def.sfx !== null && A && A.play) A.play(def.sfx);
+      if (ev.t === 'mate' || ev.t === 'draw') pumpedResult = true;
+      if (ev.t === 'check' && A && A.music && A.music.setIntensity) A.music.setIntensity(2);
+      if (!F || !fxOn() || !layer) continue;
+      if (def.shake) F.shake(boardEl, def.shake);
+      if (def.fx) {
+        if (ev.el) F.at(ev.el, def.fx, { layer: layer, n: def.n });
+        else F.burst(def.fx, ev.x || 0, ev.y || 0, { layer: layer, n: def.n });
+      }
+    }
+  }
+
+  /* Music intensity 0–3 (1 calm, 2 tension, 3 climax); fx/audio.js applies it
+   * on the next bar boundary. Reads only public view fields. */
+  function setIntensity(view) {
+    if (!A || !A.music || !A.music.setIntensity) return;
+    const g = S.game;
+    let lvl = 1;
+    if (g.id === 'checkers' && view && view.jumpFrom >= 0) lvl = 2;
+    else if (g.id === 'uno' && view && Array.isArray(view.counts)) {
+      for (let i = 0; i < view.counts.length; i++) {
+        if (String(i) !== String(S.mySide) && view.counts[i] === 1) { lvl = 2; break; }
+      }
+    } else if (g.id === 'poker' && view && Array.isArray(view.players)) {
+      let minStack = Infinity;
+      for (const p of view.players) {
+        if (!p) continue;
+        if (p.allIn) lvl = 3;
+        if (!p.folded && !p.allIn && p.stack > 0 && p.stack < minStack) minStack = p.stack;
+      }
+      if (lvl < 2 && view.result) lvl = 2;
+      else if (lvl < 2 && view.pot && minStack !== Infinity && view.pot >= minStack / 2) lvl = 2;
+    }
+    A.music.setIntensity(lvl);
+  }
+
   /* ---------- rendering ---------- */
   function renderAll() {
     if (!S) return;
@@ -242,11 +372,19 @@
         st.id = 'game-css-' + S.gameId;
         document.head.appendChild(st);
       }
-      st.textContent = g.css;
+      if (st.textContent !== g.css) st.textContent = g.css;
     }
 
     const side = g.currentSide(view);
     const over = g.outcome(view).over;
+
+    // Iris reveal: the first board render of the session, and whenever a
+    // finished game comes back to life (rematch / next hand). Both P2P peers
+    // derive the same finished→alive transition from the public outcome API,
+    // so both wipe identically with no new message types.
+    if (!irisDone || (lastRenderOver && !over)) { irisDone = true; irisBoard(); }
+    lastRenderOver = over;
+
     const pill = $('#turn-pill');
     if (over) { pill.textContent = 'Finished'; pill.className = 'pill'; }
     else if (side === S.mySide) { pill.textContent = 'Your turn'; pill.className = 'pill mine'; }
@@ -264,9 +402,10 @@
 
     g.render(view, $('#board'), {
       mySide: S.mySide,
-      interactive: !over && side === S.mySide && S.mode !== 'p2p-guest-waiting',
+      interactive: !over && side === S.mySide,
       onMove: userMove
     });
+    pumpEvents($('#board')); // SFX + particles for the view diff this render emitted
 
     const pEl = $('#players');
     pEl.innerHTML = '';
@@ -299,21 +438,33 @@
 
   function afterMove() {
     if (!S) return;
+    if (botTimer !== null) { clearTimeout(botTimer); botTimer = null; }
     const g = S.game;
     const out = g.outcome(S.state);
     renderAll();
     if (out.over) {
       S.over = true;
+      lastTurnSide = null;
       broadcastView();
       showResult(out.text, g);
       return;
     }
-    broadcastView();
     const side = g.currentSide(S.state);
+    // soft cue when the turn passes from me to the other side (one per exchange)
+    if (lastTurnSide !== null && side !== null &&
+        String(lastTurnSide) === String(S.mySide) && String(side) !== String(S.mySide)) {
+      if (A && A.play) A.play('tick');
+    }
+    lastTurnSide = side;
+    setIntensity(S.mode === 'p2p-guest' ? S.view : S.game.viewFor(S.state, S.mySide));
+    broadcastView();
     if (S.mode === 'local' && side !== S.mySide) {
-      setTimeout(() => {
+      botTimer = setTimeout(() => {
+        botTimer = null;
         if (!S || S.over || S.mode !== 'local') return;
+        if (g.currentSide(S.state) !== side) return; // state changed while the timer was pending
         const m = g.aiMove(S.state, side);
+        if (!m) return;                              // no legal move for this side
         g.applyMove(S.state, m);
         addLog(g.describeMove(S.state, m));
         afterMove();
@@ -328,6 +479,13 @@
     if (m.t === 'state') {                       // guest
       S.view = m.view;
       renderAll();
+      // the opponent just moved and the turn is mine — soft cue
+      const ns = g.currentSide(S.view);
+      if (ns !== null && String(ns) === String(S.mySide) && lastTurnSide !== null && String(lastTurnSide) !== String(S.mySide)) {
+        if (A && A.play) A.play('tick');
+      }
+      lastTurnSide = ns;
+      setIntensity(S.view);
       const out = g.outcome(S.view);
       if (out.over) { S.over = true; showResult(out.text, g); }
       else if (S.over) { S.over = false; $('#overlay').classList.add('hidden'); }
@@ -340,6 +498,7 @@
       addLog(g.describeMove(S.state, m.move));
       afterMove();
     } else if (m.t === 'rematch') {              // host
+      if (!S.over) return;                        // guests can only request after the game ends
       if (S.game.nextHand) beginNextHand(); else beginRematch();
     } else if (m.t === 'chat') {
       addChat('Opponent', m.text);
@@ -394,6 +553,22 @@
     }, 2200);
   }
 
+  /* Win / lose / draw from the result text (game modules are frozen, so the
+     tone is a heuristic over their outcome strings):
+       poker/uno: "Player N wins …"   chess: "White|Black wins …"
+       checkers:  "Red|Black wins …"  draws: "Draw — …" / "Stalemate — draw." */
+  function resultTone(g, text) {
+    if (/\bdraw\b/i.test(text)) return 'draw';
+    if (text.indexOf('split') >= 0) return 'draw'; // poker split pot
+    if (g.id === 'poker' || g.id === 'uno') {
+      const mine = 'Player ' + (parseInt(String(S.mySide), 10) + 1);
+      return text.indexOf(mine + ' wins') >= 0 ? 'win' : 'lose';
+    }
+    const mine = g.id === 'chess' ? (S.mySide === 'white' ? 'White' : 'Black')
+                                  : (S.mySide === 'red' ? 'Red' : 'Black');
+    return text.indexOf(mine + ' wins') >= 0 ? 'win' : 'lose';
+  }
+
   function showResult(text, g) {
     const iconEl = $('#overlay-icon');
     if (iconEl) {
@@ -406,7 +581,19 @@
       fxEl.innerHTML = '';
       if (g.id !== 'poker') confettiBurst(fxEl); // poker hands end constantly: icon only
     }
-    $('#overlay-title').textContent = g.id === 'poker' ? 'Hand over' : 'Game over';
+    const title = $('#overlay-title');
+    const label = g.id === 'poker' ? 'Hand over' : 'Game over';
+    // per-character entrance (styles.css .ot-char); spaces become nbsp so the
+    // inline-block spans keep their width. The Node stub has no style object.
+    title.innerHTML = '';
+    if (title.style) title.style.animation = 'none'; // letters play instead of the h2 fade
+    for (let i = 0; i < label.length; i++) {
+      const sp = document.createElement('span');
+      sp.className = 'ot-char';
+      sp.textContent = label[i] === ' ' ? '\u00a0' : label[i];
+      if (sp.style) sp.style.animationDelay = Math.min(i, 26) * 38 + 'ms';
+      title.appendChild(sp);
+    }
     $('#overlay-text').textContent = text;
     const primary = $('#overlay-primary');
     if (S.mode === 'p2p-guest') {
@@ -415,6 +602,28 @@
       primary.textContent = g.nextHand ? 'Next hand →' : '↻ Rematch';
     }
     $('#overlay').classList.remove('hidden');
+    if (typeof primary.focus === 'function') primary.focus();
+
+    // fanfare: one SFX, then a tone-matched FX moment in the overlay's layer
+    overlayFxLayer = F && F.attach ? (F.attach(fxEl) || null) : null;
+    const tone = resultTone(g, text);
+    // The board pump may have just played the mate/draw sting — don't double it
+    // with the overlay tone (the fanfare FX below still plays).
+    if (A && A.play && !pumpedResult) A.play(tone);
+    if (A && A.music) A.music.stop(); // the game's scene ends here
+    if (F && fxOn() && overlayFxLayer) {
+      const w = (fxEl && typeof fxEl.clientWidth === 'number' && fxEl.clientWidth > 0) ? fxEl.clientWidth : 320;
+      const h = (fxEl && typeof fxEl.clientHeight === 'number' && fxEl.clientHeight > 0) ? fxEl.clientHeight : 240;
+      if (tone === 'win') {
+        for (let i = 0; i < 3; i++) {
+          F.burst('firework', Math.round(w * (0.2 + 0.3 * i)), Math.round(h * (0.25 + 0.15 * (i % 2))), { layer: overlayFxLayer, n: 36 });
+        }
+      } else if (tone === 'lose') {
+        F.burst('smoke', Math.round(w / 2), Math.round(h * 0.4), { layer: overlayFxLayer, n: 24 });
+      } else {
+        F.burst('ring', Math.round(w / 2), Math.round(h * 0.45), { layer: overlayFxLayer });
+      }
+    }
   }
 
   $('#overlay-primary').addEventListener('click', () => {
@@ -442,8 +651,8 @@
     $('#log').innerHTML = '';
     $('#overlay').classList.add('hidden');
     addLog('New game started.');
-    broadcastView();
-    afterMove();
+    if (A && A.music) { A.music.stop(); A.music.start(S.gameId); } // resume the scene
+    afterMove(); // broadcasts the new state
   }
 
   function beginNextHand() {
@@ -454,15 +663,20 @@
     S.game.nextHand(S.state);
     $('#overlay').classList.add('hidden');
     addLog('New hand — dealer: ' + S.game.sideName(S.state.dealer != null ? String(S.state.dealer) : S.mySide));
-    broadcastView();
-    afterMove();
+    if (A && A.music) A.music.setIntensity(1); // new hand, back to calm
+    afterMove(); // broadcasts the new state (re-renders the board fresh)
   }
 
   function leaveGame() {
-    P2P.close();
+    if (botTimer !== null) { clearTimeout(botTimer); botTimer = null; }
+    P2P.close(); // the channel's onclose fires P2P.onFail → the disconnect chime
     S = null;
+    lastTurnSide = null;
+    boardFxLayer = null;
+    overlayFxLayer = null;
     $('#overlay').classList.add('hidden');
     show('screen-menu');
+    if (A && A.music) { A.music.stop(); A.music.start('menu'); }
   }
   $('#btn-leave').addEventListener('click', leaveGame);
 
@@ -499,6 +713,96 @@
     el.appendChild(div);
     while (el.children.length > 80) el.removeChild(el.children[0]);
     el.scrollTop = el.scrollHeight;
+  }
+
+  /* ---------- audio UI (topbar popover; settings live in fx/audio.js) ----------
+     The popover only exists in the real DOM; every hook below is null-guarded
+     so the Node click-test stub (which has no topbar audio elements) skips it. */
+  const btnSound = $('#btn-sound');
+  const audioPop = $('#audio-pop');
+  const audioUi = $('#audio-ui');
+
+  function audioUIState() {
+    if (!A || !btnSound || !audioUi) return;
+    const muted = A.muted();
+    btnSound.classList.toggle('muted', muted);
+    audioUi.classList.toggle('muted', muted);
+    audioUi.classList.toggle('music-on', !muted && A.musicOn() && !!(A.music && A.music.playing));
+    if (btnSound.setAttribute) {
+      btnSound.setAttribute('aria-label', muted ? 'Unmute sound' : 'Adjust sound');
+      btnSound.setAttribute('aria-expanded',
+        String(!!audioPop && !audioPop.classList.contains('hidden')));
+    }
+  }
+
+  if (btnSound && audioPop) {
+    btnSound.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      audioPop.classList.toggle('hidden');
+      audioUIState();
+    });
+    if (document.addEventListener) document.addEventListener('click', (e) => {
+      if (audioPop.classList.contains('hidden')) return;
+      const t = e && e.target;
+      const inPop = audioPop.contains ? audioPop.contains(t) : true;
+      const inBtn = btnSound.contains ? btnSound.contains(t) : true;
+      if (!inPop && !inBtn) { audioPop.classList.add('hidden'); audioUIState(); }
+    });
+  }
+  if (A && btnSound && audioPop) {
+    const vol = $('#audio-vol');
+    if (vol) {
+      vol.value = String(Math.round(A.volume() * 100));
+      vol.addEventListener('input', () => { A.setVolume((parseInt(vol.value, 10) || 0) / 100); });
+    }
+    const mus = $('#audio-music');
+    if (mus) {
+      mus.checked = A.musicOn();
+      mus.addEventListener('change', () => { A.setMusicOn(!!mus.checked); audioUIState(); });
+    }
+    const sfx = $('#audio-sfx');
+    if (sfx) {
+      sfx.checked = A.sfxOn();
+      sfx.addEventListener('change', () => {
+        A.setSfxOn(!!sfx.checked);
+        if (F) F.setEnabled(!!sfx.checked);
+        audioUIState();
+      });
+    }
+    if (A.music) A.music.onchange = () => audioUIState();
+    audioUIState();
+  }
+
+  /* ---------- menu micro-interaction: cursor spotlight ----------
+   * One delegated pointermove on the card grid; the hovered card's --mx/--my
+   * custom props (consumed by .gcard::before) update at most once per frame
+   * via rAF. Presentation only: null-guarded so the Node click-test (no rAF,
+   * no getBoundingClientRect, no style) skips every step. */
+  const cardsEl = $('#screen-menu .cards');
+  if (cardsEl && cardsEl.addEventListener) {
+    let spCard = null, spX = 0, spY = 0, spRaf = 0;
+    const spApply = () => {
+      spRaf = 0;
+      const c = spCard;
+      spCard = null;
+      if (!c || !c.style || !c.style.setProperty || typeof c.getBoundingClientRect !== 'function') return;
+      const r = c.getBoundingClientRect();
+      c.style.setProperty('--mx', (spX - r.left) + 'px');
+      c.style.setProperty('--my', (spY - r.top) + 'px');
+    };
+    cardsEl.addEventListener('pointermove', (e) => {
+      const t = e && e.target;
+      const c = t && t.closest ? t.closest('.gcard') : null;
+      if (!c) { spCard = null; return; }
+      spCard = c;
+      spX = (e.clientX || 0);
+      spY = (e.clientY || 0);
+      if (typeof requestAnimationFrame === 'function') {
+        if (!spRaf) spRaf = requestAnimationFrame(spApply);
+      } else {
+        spApply();
+      }
+    });
   }
 
   /* ---------- boot ---------- */

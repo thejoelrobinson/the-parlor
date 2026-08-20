@@ -195,6 +195,7 @@
 
   function aiMove(state, side) {
     const moves = legalMoves(state, side);
+    // CONTRACT: null when the side is out of turn or has no legal move; callers null-check.
     if (!moves.length) return null;
     moves.sort((a, b) => (b.cap ? 1 : 0) - (a.cap ? 1 : 0));
     let best = moves[0], bestScore = -Infinity;
@@ -207,14 +208,91 @@
 
   /* ---------- render ---------- */
 
+  /* ---------- FX events (P2P-safe) ----------
+     Both P2P peers diff the same consecutive views, so each fires identical
+     SFX/particles locally: main.js's pumpEvents consumes el.__events after
+     every render. Signature = 64-char board encoding ('.' empty, 'r'/'b' men,
+     'R'/'B' kings) + '|' + turn + '|' + jump pointer. The previous signature
+     and the other per-render presentation state live on the render element
+     (el.__ckPrevSig / __ckPrevBoard / __ckChipKey / __ckLmKey) because #board
+     persists across games in one session. No result events: the overlay's
+     resultTone carries the win/draw audio. */
+  const sigOf = (view) => {
+    const b = view.board;
+    let s = '';
+    for (let i = 0; i < 64; i++) {
+      const p = b[i];
+      if (!p) s += '.';
+      else s += p.c === 'red' ? (p.king ? 'R' : 'r') : (p.king ? 'B' : 'b');
+    }
+    return s + '|' + view.turn + '|' + view.jumpFrom;
+  };
+
+  const isManCh = (c) => c === 'r' || c === 'b';
+  const isKingCh = (c) => c === 'R' || c === 'B';
+  const sameCh = (a, b) => a === b || (a === 'r' && b === 'R') || (a === 'b' && b === 'B');
+
+  // Plan {t, i?} events from two signatures (pure; render attaches the square
+  // elements). Vanished unpaired man = capture (multijump while a jump
+  // sequence is still in progress), paired mover = move (suppressed when a
+  // capture happened), man->king flip = crown (may ride on a capture).
+  function diffFx(prevSig, newSig, view) {
+    const plan = [];
+    if (typeof prevSig !== 'string') { plan.push({ t: 'deal' }); return plan; }
+    const oldC = prevSig.slice(0, 64);
+    const newC = newSig.slice(0, 64);
+    let changed = 0;
+    for (let i = 0; i < 64; i++) if (oldC[i] !== newC[i]) changed++;
+    if (changed > 8) { plan.push({ t: 'deal' }); return plan; } // board reset (rematch)
+    if (changed === 0) return plan; // identical re-render: nothing to play
+    const jumping = view.jumpFrom >= 0;
+    const froms = [], tos = [];
+    for (let i = 0; i < 64; i++) {
+      if (oldC[i] !== '.' && newC[i] === '.') froms.push(i);
+      else if (oldC[i] === '.' && newC[i] !== '.') tos.push(i);
+    }
+    // Pair mover origins with landing squares by identity: same color; a
+    // crowning move flips man->king on the landing square and still pairs.
+    const used = {};
+    const pairs = [];
+    for (let ti = 0; ti < tos.length; ti++) {
+      const to = tos[ti], nc = newC[to];
+      for (let f = 0; f < froms.length; f++) {
+        if (used[f]) continue;
+        if (sameCh(oldC[froms[f]], nc)) {
+          pairs.push({ from: froms[f], to: to });
+          used[f] = true;
+          break;
+        }
+      }
+    }
+    let captured = false;
+    for (let f = 0; f < froms.length; f++) {
+      if (used[f]) continue;
+      captured = true;
+      plan.push({ t: jumping ? 'multijump' : 'capture', i: froms[f] }); // one per captured man
+    }
+    if (!captured) {
+      for (const pr of pairs) plan.push({ t: 'move', i: pr.to });
+    }
+    for (const pr of pairs) { // crowned on the landing move (man -> king)
+      if (isManCh(oldC[pr.from]) && isKingCh(newC[pr.to])) plan.push({ t: 'crown', i: pr.to });
+    }
+    for (let i = 0; i < 64; i++) { // defensive in-place man->king flip (cannot occur in this engine)
+      if (oldC[i] !== '.' && newC[i] !== '.' && isManCh(oldC[i]) && isKingCh(newC[i]) && sameCh(oldC[i], newC[i])) {
+        plan.push({ t: 'crown', i: i });
+      }
+    }
+    return plan;
+  }
+
   /* ---------- FLIP board transition ----------
      Same technique as chess: snapshot the previous render's board, read the
      old square rects while the old DOM is still live, then glide the moved
      pieces, fade captured ones as ghosts, and pop the landing piece.
-     Feature-detected so the Node click-test stub skips the effect entirely. */
-  let prevBoard = null;
-  let lastChipKey = null; // last-move chip (incl. jump badge): replays only when it changes
-  let lastLmKey = null;   // lm-square flash: replays only when the last-move pair changes
+     Feature-detected so the Node click-test stub skips the effect entirely.
+     Per-render state (previous board, chip/lm keys, FX signature) lives on
+     the render element: el.__ckPrevBoard / __ckChipKey / __ckLmKey / __ckPrevSig. */
 
   function motionOff() {
     try {
@@ -232,14 +310,18 @@
     return !!a && !!c && a.c === c.c && !!a.king === !!c.king;
   }
 
-  function makeDisc(piece) {
+  function makeDisc(piece, i) {
     const pc = document.createElement('div');
     pc.className = 'chk-pc ' + piece.c;
     if (piece.king) {
+      pc.classList.add('ck-king');
       const cr = document.createElement('span');
       cr.className = 'crown';
       cr.textContent = '♛';
       pc.appendChild(cr);
+    } else if (typeof i === 'number') {
+      const r = i >> 3;
+      if (piece.c === 'red' ? r === 0 : r === 7) pc.classList.add('ck-crownrow'); // promotion row
     }
     return pc;
   }
@@ -250,12 +332,18 @@
     const onMove = opts.onMove;
     const b = view.board;
 
+    /* --- FX event plan: pure diff of this view against the last rendered
+       signature on this element (P2P-safe; main.js pumps el.__events) --- */
+    const newSig = sigOf(view);
+    const evPlan = diffFx(el.__ckPrevSig, newSig, view);
+
     if (!interactive) el.__sel = -1;
     const getSel = () => (typeof el.__sel === 'number' ? el.__sel : -1);
     const sel = getSel();
 
     /* --- diff against the previous render's board --- */
     const flip = canFlip();
+    const prevBoard = el.__ckPrevBoard;
     const glides = [], ghosts = [];
     const landSet = {};
     let cascade = false;
@@ -316,9 +404,9 @@
     /* --- last-move chip (with keep-jumping badge) --- */
     const jumping = view.jumpFrom >= 0;
     const text = lastChip(view.last) + (jumping ? '  ·  jump again' : '');
-    const chipChanged = text !== lastChipKey;
+    const chipChanged = text !== el.__ckChipKey;
     const lmKey = view.last ? (view.last.from + ':' + view.last.to + ':' + (view.last.cap ? 1 : 0)) : '';
-    const lmChanged = lmKey !== lastLmKey;
+    const lmChanged = lmKey !== el.__ckLmKey;
     const chipEl = document.createElement('div');
     chipEl.className = 'chk-last' + (chipChanged ? '' : ' still') + (jumping ? ' jump' : '');
     chipEl.textContent = text;
@@ -326,7 +414,7 @@
 
     /* --- board --- */
     const boardEl = document.createElement('div');
-    boardEl.className = 'chk-board';
+    boardEl.className = 'chk-board' + (jumping ? ' ck-jumping' : '');
 
     const targets = {};
     if (interactive) {
@@ -334,12 +422,15 @@
       for (const m of moves) (targets[m.from] = targets[m.from] || []).push(m);
     }
 
+    const sqEls = [];
     for (let i = 0; i < 64; i++) {
       const r = i >> 3, c = i & 7;
       const dark = ((r + c) & 1) === 1;
       const sq = document.createElement('div');
       sq.className = 'chk-sq ' + (dark ? 'dark' : 'light');
       sq.dataset.i = String(i);
+      sqEls.push(sq);
+      if (i === view.jumpFrom) sq.classList.add('must-jump');
       if (view.last && (view.last.from === i || view.last.to === i)) {
         sq.classList.add('lm');
         if (lmChanged) sq.classList.add('lm-new');
@@ -348,7 +439,7 @@
       if (p) {
         const wrap = document.createElement('span');
         wrap.className = 'chk-wrap' + (cascade ? ' deal' : '');
-        const pc = makeDisc(p);
+        const pc = makeDisc(p, i);
         if (landSet[i]) pc.classList.add('land');
         if (!cascade && landSet[i] && p.king && prevBoard && prevBoard[i] && !prevBoard[i].king) pc.classList.add('crowned');
         wrap.appendChild(pc);
@@ -428,9 +519,11 @@
       }
     }
 
-    prevBoard = b;
-    lastChipKey = text;
-    lastLmKey = lmKey;
+    el.__events = evPlan.map((p) => (p.i >= 0 ? { t: p.t, el: sqEls[p.i] } : { t: p.t, el: boardEl })); // deal centers on the whole board
+    el.__ckPrevSig = newSig;
+    el.__ckPrevBoard = b;
+    el.__ckChipKey = text;
+    el.__ckLmKey = lmKey;
 
     function paint() {
       const s0 = getSel();
@@ -493,17 +586,18 @@
   }
 
   const css = [
-    '.chk-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
-    '.chk-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
+    '.chk-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(100%,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
+    '.chk-sq{position:relative;aspect-ratio:1;touch-action:manipulation;display:flex;align-items:center;justify-content:center}',
     '.chk-sq.light{background:#f0e9d8}',
     '.chk-sq.dark{background:#6d4f3d}',
     '.chk-wrap{width:74%;height:74%;position:relative;pointer-events:none;transition:transform .14s var(--ease-spring)}',
     '.chk-wrap.deal{animation:pc-deal .3s var(--ease-out) both}',
-    '.chk-pc{width:100%;height:100%;border-radius:50%;box-shadow:0 3px 6px rgba(0,0,0,.4), inset 0 -5px 9px rgba(0,0,0,.3), inset 0 3px 6px rgba(255,255,255,.22);pointer-events:none}',
+    '.chk-pc{width:100%;height:100%;border-radius:50%;position:relative;box-shadow:0 4px 8px rgba(0,0,0,.35), 0 8px 16px rgba(0,0,0,.18), inset 0 -6px 10px rgba(0,0,0,.34), inset 0 3px 6px rgba(255,255,255,.26), inset 0 0 0 1px rgba(0,0,0,.16);pointer-events:none}',
     '.chk-pc.land{animation:pc-land .34s var(--ease-spring) .1s both}',
     '.chk-pc.red{background:radial-gradient(circle at 35% 30%, #a34a38, #6e2118 74%)}',
     '.chk-pc.black{background:radial-gradient(circle at 35% 30%, #4a5866, #14191f 74%)}',
-    '.chk-pc .crown{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e6b954;font-size:clamp(12px,3.2vw,24px);text-shadow:0 1px 3px rgba(0,0,0,.7)}',
+    '.chk-pc .crown{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e8c15a;font-size:clamp(12px,3.2vw,24px);text-shadow:0 1px 3px rgba(0,0,0,.7), 0 0 9px rgba(232,193,90,.65)}',
+    '.chk-pc.ck-crownrow{box-shadow:0 4px 8px rgba(0,0,0,.35), 0 8px 16px rgba(0,0,0,.18), inset 0 -6px 10px rgba(0,0,0,.34), inset 0 3px 6px rgba(255,255,255,.26), inset 0 0 0 2px rgba(232,193,90,.5), inset 0 0 9px rgba(232,193,90,.3)}',
     '.chk-pc.ghost{position:absolute;display:flex;align-items:center;justify-content:center;opacity:.95;box-shadow:0 1px 5px rgba(0,0,0,.4)}',
     '.chk-sq.own{cursor:pointer}',
     '.chk-sq.own:hover{box-shadow:inset 0 0 0 3px rgba(22,104,63,.45)}',
@@ -512,12 +606,16 @@
     '.chk-sq.sel .chk-wrap{transform:scale(1.08)}',
     '.chk-sq.tgt{cursor:pointer}',
     '.chk-sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(22,104,63,.9);box-shadow:0 1px 4px rgba(0,0,0,.3);pointer-events:none;animation:dot-in .16s var(--ease-spring) both}',
+    '.chk-sq.must-jump{animation:ck-must 1.1s ease-in-out infinite}',
+    '@keyframes ck-must{0%,100%{box-shadow:inset 0 0 0 2px rgba(232,193,90,.4), inset 0 0 10px rgba(232,193,90,.18)}50%{box-shadow:inset 0 0 0 5px rgba(232,193,90,.95), inset 0 0 20px rgba(232,193,90,.5)}}',
+    '.ck-jumping .chk-sq.tgt{box-shadow:inset 0 0 12px rgba(232,193,90,.55)}',
+    '.ck-jumping .chk-sq.tgt::after{background:rgba(216,160,54,.95);box-shadow:0 0 10px rgba(232,193,90,.8), 0 1px 4px rgba(0,0,0,.35)}',
     '.chk-sq.lm{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}',
     '.chk-sq.lm.lm-new{animation:chk-lm-flash .5s var(--ease-out) both}',
     '@keyframes chk-lm-flash{0%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}45%{box-shadow:inset 0 0 0 4px rgba(194,147,48,1)}100%{box-shadow:inset 0 0 0 3px rgba(194,147,48,.55)}}',
     '.chk-pc.crowned .crown{animation:chk-crown .7s var(--ease-spring) .05s both}',
     '@keyframes chk-crown{0%{transform:scale(0) rotate(-30deg);opacity:0}60%{transform:scale(1.5) rotate(8deg);opacity:1}100%{transform:scale(1) rotate(0)}}',
-    '.chk-last{width:min(92vw,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chk-last-in .3s var(--ease-out) both}',
+    '.chk-last{width:min(100%,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chk-last-in .3s var(--ease-out) both}',
     '.chk-last.still{animation:none}',
     '.chk-last.jump{border-color:var(--gold);animation:chk-last-in .3s var(--ease-out) both,chk-jump-pulse 1.4s ease-in-out .3s infinite}',
     '@keyframes chk-last-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}',

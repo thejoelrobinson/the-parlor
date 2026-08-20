@@ -28,15 +28,27 @@
   }
 
   function newState() {
-    return {
+    const s = {
       board: startBoard(),
       turn: 'white',
       castling: { wK: true, wQ: true, bK: true, bQ: true },
       ep: -1,
       halfmove: 0,
-      fullmove: 1,
-      last: null
+      last: null,
+      history: []
     };
+    s.history.push(posKey(s));
+    return s;
+  }
+
+  /* Position key for threefold repetition: piece placement, side to move,
+   * en-passant target, and castling rights. (Rights — not the rooks' squares —
+   * define the position, so a rook that leaves and returns does not count.) */
+  function posKey(state) {
+    const cr = state.castling;
+    return state.board.map((p) => (p ? p.p + p.c : '.')).join('') +
+      '|' + state.turn + '|' + state.ep + '|' +
+      (cr ? (cr.wK ? 'K' : '') + (cr.wQ ? 'Q' : '') + (cr.bK ? 'k' : '') + (cr.bQ ? 'q' : '') : '');
   }
 
   const inb = (r, c) => r >= 0 && r < 8 && c >= 0 && c < 8;
@@ -128,7 +140,7 @@
     return nb;
   }
 
-  function genPseudo(b, side, ep, full) {
+  function genPseudo(b, side, ep, full, cr) {
     const out = [];
     const dir = side === 'white' ? -1 : 1;
     const startRow = side === 'white' ? 6 : 1;
@@ -178,12 +190,18 @@
           const row = side === 'white' ? 7 : 0;
           const home = row * 8 + 4;
           if (i === home && !attacked(b, home, enemy(side))) {
-            const cr = side === 'white' ? (b[63] && b[63].p === 'r' && b[63].c === 'white') : (b[7] && b[7].p === 'r' && b[7].c === 'black');
-            if (cr && !b[row * 8 + 5] && !b[row * 8 + 6] && !attacked(b, row * 8 + 5, enemy(side)) && !attacked(b, row * 8 + 6, enemy(side))) {
+            // The right is tracked in state (a rook that leaves its home square
+            // forfeits it even if it returns); the rook must still be there.
+            const kRight = !cr || cr[side === 'white' ? 'wK' : 'bK'];
+            const rookK = side === 'white' ? (b[63] && b[63].p === 'r' && b[63].c === 'white') : (b[7] && b[7].p === 'r' && b[7].c === 'black');
+            if (kRight && rookK && !b[row * 8 + 5] && !b[row * 8 + 6] && !attacked(b, row * 8 + 5, enemy(side)) && !attacked(b, row * 8 + 6, enemy(side))) {
               out.push({ from: home, to: row * 8 + 6, promo: null });
             }
-            const cq = side === 'white' ? (b[56] && b[56].p === 'r' && b[56].c === 'white') : (b[0] && b[0].p === 'r' && b[0].c === 'black');
-            if (cq && !b[row * 8 + 1] && !b[row * 8 + 2] && !b[row * 8 + 3] && !attacked(b, row * 8 + 3, enemy(side)) && !attacked(b, row * 8 + 2, enemy(side)) && !attacked(b, row * 8 + 1, enemy(side))) {
+            const qRight = !cr || cr[side === 'white' ? 'wQ' : 'bQ'];
+            const rookQ = side === 'white' ? (b[56] && b[56].p === 'r' && b[56].c === 'white') : (b[0] && b[0].p === 'r' && b[0].c === 'black');
+            // FIDE: only the king's path squares (c, d, e) must be unattacked;
+            // the rook's path square (b) may be attacked.
+            if (qRight && rookQ && !b[row * 8 + 1] && !b[row * 8 + 2] && !b[row * 8 + 3] && !attacked(b, row * 8 + 3, enemy(side)) && !attacked(b, row * 8 + 2, enemy(side))) {
               out.push({ from: home, to: row * 8 + 2, promo: null });
             }
           }
@@ -208,9 +226,9 @@
     return out;
   }
 
-  function genLegal(b, side, ep, full) {
+  function genLegal(b, side, ep, full, cr) {
     const out = [];
-    for (const m of genPseudo(b, side, ep, full)) {
+    for (const m of genPseudo(b, side, ep, full, cr)) {
       const nb = applyBoard(b, m, ep);
       if (!inCheck(nb, side)) out.push(m);
     }
@@ -219,7 +237,7 @@
 
   function legalMoves(state, side) {
     if (side !== state.turn) return [];
-    return genLegal(state.board, side, state.ep, true);
+    return genLegal(state.board, side, state.ep, true, state.castling);
   }
 
   function nm(i) { return FILES[i & 7] + (8 - (i >> 3)); }
@@ -256,7 +274,6 @@
 
     state.ep = piece.p === 'p' && Math.abs(m.to - m.from) === 16 ? (m.from + m.to) >> 1 : -1;
     state.halfmove = piece.p === 'p' || captured ? 0 : state.halfmove + 1;
-    if (side === 'black') state.fullmove++;
     state.turn = enemy(side);
 
     let text = (side === 'white' ? 'White ' : 'Black ') + NAME[piece.p] + ' ' + nm(m.from) +
@@ -273,6 +290,7 @@
       promo: m.promo, castle: castle, ep: isEP,
       text: text
     };
+    state.history.push(posKey(state));
   }
 
   function describeMove(state, m) {
@@ -308,6 +326,14 @@
         : { over: true, text: 'Stalemate — draw.' };
     }
     if (state.halfmove >= 100) return { over: true, text: 'Draw — 50-move rule.' };
+    if (state.history) {
+      const key = posKey(state);
+      let n = 0;
+      for (let i = state.history.length - 1; i >= 0 && n < 3; i--) {
+        if (state.history[i] === key) n++;
+      }
+      if (n >= 3) return { over: true, text: 'Draw — threefold repetition.' };
+    }
     if (insufficientMaterial(state.board)) return { over: true, text: 'Draw — insufficient material.' };
     return { over: false };
   }
@@ -349,18 +375,39 @@
     moves.sort((a, b2) => b2.__s - a.__s);
   }
 
-  function negamax(b, color, depth, alpha, beta) {
+  /* Per-child ep target and castling rights, mirroring applyMove's rules so
+   * the search tree sees the same positions the game would actually reach. */
+  function childEp(m, piece) {
+    return piece.p === 'p' && Math.abs(m.to - m.from) === 16 ? (m.from + m.to) >> 1 : -1;
+  }
+
+  function childCr(cr, m, piece) {
+    if (!cr) return null;
+    const n = { wK: cr.wK, wQ: cr.wQ, bK: cr.bK, bQ: cr.bQ };
+    if (piece.p === 'k') {
+      if (piece.c === 'white') { n.wK = false; n.wQ = false; }
+      else { n.bK = false; n.bQ = false; }
+    }
+    if (m.from === 63 || m.to === 63) n.wK = false;
+    if (m.from === 56 || m.to === 56) n.wQ = false;
+    if (m.from === 7 || m.to === 7) n.bK = false;
+    if (m.from === 0 || m.to === 0) n.bQ = false;
+    return n;
+  }
+
+  function negamax(b, color, depth, alpha, beta, ep, cr) {
     if (depth === 0) {
-      if (inCheck(b, color) && genLegal(b, color, -1, false).length === 0) return -MATE;
+      if (inCheck(b, color) && genLegal(b, color, ep, true, cr).length === 0) return -MATE;
       return color === 'white' ? evalBoard(b) : -evalBoard(b);
     }
-    const moves = genLegal(b, color, -1, false);
+    const moves = genLegal(b, color, ep, true, cr);
     if (moves.length === 0) return inCheck(b, color) ? -MATE - depth : 0;
     orderMoves(moves, b);
     let best = -Infinity;
     const next = enemy(color);
     for (const m of moves) {
-      const s = -negamax(applyBoard(b, m, -1), next, depth - 1, -beta, -alpha);
+      const piece = b[m.from];
+      const s = -negamax(applyBoard(b, m, ep), next, depth - 1, -beta, -alpha, childEp(m, piece), childCr(cr, m, piece));
       if (s > best) best = s;
       if (best > alpha) alpha = best;
       if (alpha >= beta) break;
@@ -375,7 +422,8 @@
     let best = moves[0], bestScore = -Infinity;
     const next = enemy(side);
     for (const m of moves) {
-      const s = -negamax(applyBoard(state.board, m, state.ep), next, 2, -Infinity, Infinity);
+      const piece = state.board[m.from];
+      const s = -negamax(applyBoard(state.board, m, state.ep), next, 2, -Infinity, Infinity, childEp(m, piece), childCr(state.castling, m, piece));
       if (s > bestScore) { bestScore = s; best = m; }
     }
     delete best.__s; // keep returned moves canonical JSON
@@ -398,15 +446,15 @@
   /* ---------- FLIP board transition ----------
      render() rebuilds the whole board every call, so to make pieces *glide*
      across the board instead of teleporting we snapshot the previous
-     render's board in this closure and read the old square rects while the
-     old DOM is still live (FLIP: First, Last, Invert, Play). Only a single
-     legal move (1–4 changed squares) animates; a larger diff (board reset)
-     plays a staggered cascade instead. The layout reads are feature-detected
-     so the Node click-test stub (no layout, no rAF) simply skips the effect.
-     Animation state never touches state or moves — the JSON contract holds. */
-  let prevBoard = null;
-  let lastTextKey = null; // last-move chip: replays only when the move actually changes
-  let lastLmKey = null;   // lm-square flash: replays only when the last-move pair changes
+     render's board and read the old square rects while the old DOM is still
+     live (FLIP: First, Last, Invert, Play). Only a single legal move
+     (1–4 changed squares) animates; a larger diff (board reset) plays a
+     staggered cascade instead. The layout reads are feature-detected so the
+     Node click-test stub (no layout, no rAF) simply skips the effect. The
+     snapshot hangs off the render element (el.__prevBoard & friends) rather
+     than module state, so two boards rendered in one process cannot clobber
+     each other's animation. Animation state never touches state or moves —
+     the JSON contract holds. */
 
   function motionOff() {
     try {
@@ -436,19 +484,27 @@
     const getPromo = () => (el.__promo && typeof el.__promo === 'object' ? el.__promo : null);
     const promo = getPromo();
 
-    /* --- diff against the previous render's board --- */
+    /* --- diff against the previous render's board ---
+       Computed even when FLIP is unavailable (no rAF/layout under Node) so FX
+       events fire in every environment; `flip` only gates the visual work. */
     const flip = canFlip();
     const glides = [], ghosts = [];
+    const fx = [];
     const landSet = {};
     let cascade = false;
-    if (flip && b.length === 64) {
+    const prevBoard = el.__prevBoard;
+    if (b.length === 64) {
       if (!prevBoard) {
-        cascade = true; // first paint: deal the board in
+        cascade = flip; // first paint: deal the board in (visual only)
       } else {
         let changed = 0;
-        for (let i = 0; i < 64; i++) if (!pieceSame(prevBoard[i], b[i])) changed++;
+        for (let i = 0; i < 64; i++) {
+          const a = prevBoard[i], c = b[i];
+          if (!a && !c) continue; // empty staying empty is not a change
+          if (!pieceSame(a, c)) changed++;
+        }
         if (changed > 4) {
-          cascade = true; // board reset (rematch)
+          cascade = flip; // board reset (rematch)
         } else if (changed > 0) {
           const froms = [], tos = [];
           for (let i = 0; i < 64; i++) {
@@ -457,20 +513,37 @@
           }
           const used = {};
           for (const to of tos) { // pair moved pieces by identity (castling = 2 pairs)
+            const pc = b[to];
+            let hit = -1, isPromo = false;
             for (let f = 0; f < froms.length; f++) {
               if (used[f]) continue;
-              if (pieceSame(prevBoard[froms[f]], b[to])) {
-                glides.push({ from: froms[f], to: to });
-                used[f] = true;
-                break;
+              const pp = prevBoard[froms[f]];
+              if (pieceSame(pp, pc)) { hit = f; break; }
+              // promotion: own pawn one row back on the same file becomes a piece
+              if (pc.p !== 'p' && pp.p === 'p' && pp.c === pc.c && (to & 7) === (froms[f] & 7) &&
+                  ((pc.c === 'white' && to < 8) || (pc.c === 'black' && to >= 56))) {
+                hit = f; isPromo = true; break;
               }
+            }
+            if (hit >= 0) {
+              glides.push({ from: froms[hit], to: to });
+              used[hit] = true;
+              if (isPromo) fx.push({ t: 'promo', sq: to });
+              else fx.push({ t: (pc.p === 'k' && Math.abs(to - froms[hit]) === 2) ? 'castle' : 'move', sq: to });
             }
           }
           for (let f = 0; f < froms.length; f++) { // unpaired = captured (incl. en passant)
-            if (!used[f]) ghosts.push({ i: froms[f], piece: prevBoard[froms[f]] });
+            if (!used[f]) {
+              ghosts.push({ i: froms[f], piece: prevBoard[froms[f]] });
+              fx.push({ t: 'capture', sq: froms[f] });
+            }
+          }
+          if (fx.some((e) => e.t === 'castle')) { // the castling rook's move stays silent
+            const k = fx.find((e) => e.t === 'castle');
+            for (const e of fx) if (e.t === 'move' && (e.sq >> 3) === (k.sq >> 3)) e.t = null;
           }
           for (const g of glides) landSet[g.to] = true;
-          for (let i = 0; i < 64; i++) { // promotion: piece swapped in place
+          for (let i = 0; i < 64; i++) { // piece swapped in place (capturing promo target)
             if (prevBoard[i] && b[i] && !pieceSame(prevBoard[i], b[i])) landSet[i] = true;
           }
         }
@@ -497,9 +570,9 @@
 
     /* --- last-move notation chip --- */
     const text = lastChip(view.last);
-    const textChanged = text !== lastTextKey;
+    const textChanged = text !== el.__lastTextKey;
     const lmKey = view.last ? (view.last.from + ':' + view.last.to + ':' + (view.last.promo || '')) : '';
-    const lmChanged = lmKey !== lastLmKey;
+    const lmChanged = lmKey !== el.__lastLmKey;
     const chipEl = document.createElement('div');
     chipEl.className = 'chess-last' + (textChanged ? '' : ' still');
     chipEl.textContent = text;
@@ -516,6 +589,11 @@
     }
 
     const checked = view.turn ? (inCheck(b, view.turn) ? view.turn : null) : null;
+    if (checked && checked !== el.__prevChecked) {
+      let ksq = -1;
+      for (let i = 0; i < 64; i++) if (b[i] && b[i].p === 'k' && b[i].c === checked) { ksq = i; break; }
+      if (ksq >= 0) fx.push({ t: 'check', sq: ksq });
+    }
 
     for (let i = 0; i < 64; i++) {
       const r = i >> 3, c = i & 7;
@@ -549,11 +627,19 @@
       sq.addEventListener('click', () => onSquare(i));
       boardEl.appendChild(sq);
     }
+    for (const e of fx) { // resolve square indices to the fresh DOM elements
+      if (typeof e.sq === 'number') {
+        const s = boardEl.querySelector('[data-i="' + e.sq + '"]');
+        if (s) e.el = s;
+        delete e.sq;
+      }
+    }
     el.appendChild(boardEl);
 
     /* --- game-over stamp --- */
     if (view.over) {
       const mate = view.over.indexOf('Checkmate') === 0;
+      if (view.over !== el.__prevOver) fx.push({ t: mate ? 'mate' : 'draw' });
       const st = document.createElement('div');
       st.className = 'chess-over' + (mate ? ' mate' : '');
       const word = document.createElement('span');
@@ -640,9 +726,12 @@
       }
     }
 
-    prevBoard = b;
-    lastTextKey = text;
-    lastLmKey = lmKey;
+    el.__events = fx.filter((e) => e.t); // fresh array every render, even empty (pumpEvents contract)
+    el.__prevBoard = b;
+    el.__prevChecked = checked;
+    el.__prevOver = view.over || '';
+    el.__lastTextKey = text;
+    el.__lastLmKey = lmKey;
 
     function paint() {
       const s0 = getSel();
@@ -712,11 +801,11 @@
   }
 
   const css = [
-    '.chess-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
-    '.chess-sq{position:relative;aspect-ratio:1;display:flex;align-items:center;justify-content:center}',
+    '.chess-board{position:relative;display:grid;grid-template-columns:repeat(8,1fr);width:min(100%,540px);margin:0 auto;border:1px solid #d9d2c0;border-radius:14px;overflow:hidden;box-shadow:0 2px 10px rgba(28,33,30,.14), 0 10px 30px rgba(28,33,30,.10)}',
+    '.chess-sq{position:relative;aspect-ratio:1;touch-action:manipulation;display:flex;align-items:center;justify-content:center}',
     '.chess-sq.light{background:#f0e9d8}',
     '.chess-sq.dark{background:#5c7263}',
-    '.chess-pc{font-size:clamp(20px,6.5vw,42px);line-height:1;user-select:none;pointer-events:none;transition:transform .14s var(--ease-spring)}',
+    '.chess-pc{font-size:clamp(20px,8.5vw,42px);line-height:1;user-select:none;pointer-events:none;transition:transform .14s var(--ease-spring)}',
     '.chess-pc .pc-glyph{display:inline-block;line-height:1}',
     '.chess-pc.white{color:#f7f2e5;text-shadow:-1px 0 0 rgba(28,33,30,.7),1px 0 0 rgba(28,33,30,.7),0 -1px 0 rgba(28,33,30,.7),0 1px 0 rgba(28,33,30,.7),0 2px 4px rgba(28,33,30,.4)}',
     '.chess-pc.black{color:#23282b;text-shadow:0 1px 2px rgba(255,255,255,.35)}',
@@ -738,7 +827,7 @@
     '.chess-promo{display:flex;justify-content:center;gap:10px;margin-top:14px;animation:entry-in .24s var(--ease-out) both}',
     '.chess-promo .btn{width:52px;height:58px;padding:0;display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1}',
     '.chess-promo .btn:last-child{width:auto;padding:0 16px;font-size:14px;font-weight:700;letter-spacing:.04em}',
-    '.chess-last{width:min(92vw,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chess-last-in .3s var(--ease-out) both}',
+    '.chess-last{width:min(100%,540px);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;min-height:27px;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--ink);background:var(--surface);border:1px solid var(--hair-strong);border-radius:9px;box-shadow:var(--shadow-sm);animation:chess-last-in .3s var(--ease-out) both}',
     '.chess-last.still{animation:none}',
     '@keyframes chess-last-in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}',
     '.chess-over{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;pointer-events:none;background:rgba(245,243,237,.45)}',
@@ -750,7 +839,7 @@
   const game = {
     id: 'chess',
     title: 'Chess',
-    blurb: 'The classic. Full rules: castling, en passant, promotions, draw detection.',
+    blurb: 'The classic. Full rules: castling, en passant, promotions, and every standard draw.',
     hint: 'Select a piece to see its legal moves, then click a highlighted square.',
     sideList: ['white', 'black'],
     pickSide: true,

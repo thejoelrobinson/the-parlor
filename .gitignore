@@ -1,0 +1,2 @@
+# publish cache (stale base64 payloads — do not ship)
+.pub/

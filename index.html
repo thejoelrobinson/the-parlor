@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="The Parlor — chess, checkers, UNO, and Texas Hold'em. Play the computer or a friend over peer-to-peer WebRTC. No server, no sign-in.">
 <meta name="theme-color" content="#f5f3ed">
 <title>The Parlor — Chess · Checkers · UNO · Poker</title>
@@ -19,7 +19,28 @@
     <span class="brand-mark"><svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><circle cx="32" cy="14" r="9.5"/><path d="M27 21.5h10v5H27z"/><rect x="19.5" y="26.5" width="25" height="6" rx="3"/><path d="M24.5 32.5 17.5 52h29L39.5 32.5z"/><rect x="12.5" y="54" width="39" height="8" rx="3.5"/></svg></span>The Parlor
     <span class="sub">chess · checkers · UNO · poker — against the computer, or peer-to-peer</span>
   </div>
-  <div id="conn-pill" class="pill hidden"></div>
+  <div class="topbar-right">
+    <div id="conn-pill" class="pill hidden"></div>
+    <div id="audio-ui" class="audio-ui">
+      <button id="btn-sound" class="audio-btn" aria-label="Sound settings" title="Sound" aria-haspopup="true" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor" stroke="none"/>
+          <path class="snd-wave" d="M15.5 9.2a4 4 0 0 1 0 5.6"/>
+          <path class="snd-wave" d="M18 6.8a7.4 7.4 0 0 1 0 10.4"/>
+          <path class="snd-off" d="M15.8 9.8l4.8 4.8m0-4.8l-4.8 4.8"/>
+        </svg>
+      </button>
+      <span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>
+    <div id="audio-pop" class="audio-pop hidden" role="group" aria-label="Sound settings">
+      <p class="ap-label">Sound</p>
+      <label class="ap-row"><span>Volume</span>
+        <input id="audio-vol" type="range" min="0" max="100" value="80" step="1" aria-label="Volume">
+      </label>
+      <label class="ap-row check"><input id="audio-music" type="checkbox" checked> Music</label>
+      <label class="ap-row check"><input id="audio-sfx" type="checkbox" checked> Effects</label>
+    </div>
+  </div>
 </header>
 
 <main>
@@ -133,7 +154,7 @@
 <footer class="foot">No servers · no accounts · every game runs <b>entirely in your two browsers</b></footer>
 
 <!-- ============ RESULT OVERLAY ============ -->
-<div id="overlay" class="overlay hidden">
+<div id="overlay" class="overlay hidden" role="status" aria-live="polite">
   <div class="overlay-card">
     <div id="overlay-icon" class="overlay-icon hidden" aria-hidden="true"></div>
     <h2 id="overlay-title">Game over</h2>
@@ -151,6 +172,8 @@
 <script src="games/checkers.js"></script>
 <script src="games/uno.js"></script>
 <script src="games/poker.js"></script>
+<script src="fx/audio.js"></script>
+<script src="fx/fx.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

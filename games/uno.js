@@ -86,6 +86,7 @@
   function legalMoves(state, side) {
     const me = seat(side);
     if (me === null || me >= state.hands.length) return [];
+    if (state.turn !== me) return []; // out of turn: no moves for this seat
     const hand = state.hands[me];
     if (!hand || hand.length === 0) return [];
     const top = state.discard ? state.discard[state.discard.length - 1] : state.top;
@@ -163,7 +164,6 @@
   }
 
   function describeMove(state, m) {
-    if (state.last && state.last.seat === seat(m.type === 'play' ? 'x' : 'x')) { /* no-op guard */ }
     if (state.last) return state.last.text;
     return 'move';
   }
@@ -197,7 +197,7 @@
       players: state.players,
       deckCount: state.deck.length,
       discardCount: state.discard.length,
-      top: top,
+      top: { ...top }, // clone: the view must not share a live card object
       hands: state.hands.map((h, i) => (i === me ? h.slice() : null)),
       counts: state.hands.map((h) => h.length),
       turn: state.turn,
@@ -226,6 +226,9 @@
 
   function aiMove(state, side) {
     const me = seat(side);
+    // Per the contract: aiMove returns null when the side has no legal move,
+    // which includes being out of turn (callers must null-check).
+    if (me === null || me >= state.hands.length || state.turn !== me) return null;
     const hand = state.hands[me];
     const top = state.discard[state.discard.length - 1];
     const playable = [];
@@ -334,6 +337,17 @@
     const suitChanged = view.currentSuit !== lastSuitKey;
     const dirChanged = view.dir !== lastDirKey;
 
+    /* FX events for this render (consumed by main.js pumpEvents). */
+    const fx = [];
+    /* hand animation mode — computed early so FX decisions can use it */
+    let handMode = 'still'; // still | full (fresh deal) | drawn (one card appended)
+    if (handChanged) {
+      const prev = lastHandArr || [];
+      const isAppend = myHand.length > prev.length &&
+        prev.every((c, i) => myHand[i] && c.suit + c.v === myHand[i].suit + myHand[i].v);
+      handMode = isAppend ? 'drawn' : (myHand.length < prev.length ? 'still' : 'full');
+    }
+
     el.innerHTML = '';
     const wrap = document.createElement('div');
     wrap.className = 'uno-wrap';
@@ -347,6 +361,7 @@
     const feltEl = document.createElement('div');
     feltEl.className = 'uno-felt';
     table.appendChild(feltEl);
+    if (handMode === 'full' || !lastHandArr) fx.push({ t: 'deal', el: feltEl }); // fresh deal / re-deal
 
     /* middle: deck, discard, suit/direction */
     const mid = document.createElement('div');
@@ -358,6 +373,7 @@
     const deckDealt = !deckSpin && lastDeckCount >= 0 && view.deckCount < lastDeckCount;
     const deckPile = document.createElement('div');
     deckPile.className = 'uno-pile uno-deck' + (deckSpin ? ' shuffling' : deckDealt ? ' dealt' : ' still');
+    if (deckSpin) fx.push({ t: 'shuffle', el: deckPile }); // deck ran dry → reshuffle
     const d1 = cardEl(null, true); d1.className += ' uno-d1';
     const d2 = cardEl(null, true); d2.className += ' uno-d2';
     const d3 = cardEl(null, true); d3.className += ' uno-d3';
@@ -397,6 +413,10 @@
     scnt.textContent = view.discardCount - 1;
     discPile.appendChild(scnt);
     piles.appendChild(discPile);
+    if (topChanged && lastTopKey && handMode !== 'full') { // a card was played onto the discard
+      fx.push({ t: 'play', el: discPile });
+      if (suitChanged) fx.push({ t: 'wild', el: discPile }); // a wild chose a new suit
+    }
 
     const info = document.createElement('div');
     info.className = 'uno-info';
@@ -420,6 +440,7 @@
       cell.appendChild(nm);
       if (view.counts[s] === 1) {
         const justOne = !!(lastOneArr && !lastOneArr[s]);
+        if (justOne) fx.push({ t: 'uno', el: cell }); // a count just hit one
         const badge = document.createElement('span');
         badge.className = 'uno-one' + (justOne ? ' pop' : '');
         badge.textContent = '1';
@@ -441,14 +462,8 @@
     }
     wrap.appendChild(table);
 
-    /* my hand — fanned arc; only genuinely new cards animate */
-    let handMode = 'still'; // still | full (fresh deal) | drawn (one card appended)
-    if (handChanged) {
-      const prev = lastHandArr || [];
-      const isAppend = myHand.length > prev.length &&
-        prev.every((c, i) => myHand[i] && c.suit + c.v === myHand[i].suit + myHand[i].v);
-      handMode = isAppend ? 'drawn' : (myHand.length < prev.length ? 'still' : 'full');
-    }
+    /* my hand — fanned arc; only genuinely new cards animate
+       (handMode was computed at the top of render so FX events can use it) */
     const handRow = document.createElement('div');
     handRow.className = 'uno-hand' + (handMode === 'still' ? ' still' : '');
     const moves = interactive ? legalMoves(view, mySide) : [];
@@ -489,6 +504,15 @@
       handRow.appendChild(burst);
     }
     wrap.appendChild(handRow);
+    if (lastCountsArr && handMode !== 'full') { // someone's hand grew since the last render
+      const grewMe = view.counts[me] - lastCountsArr[me];
+      if (grewMe >= 1) fx.push({ t: grewMe >= 2 ? 'draw2' : 'draw1', el: handRow });
+      for (let s = 0; s < view.players; s++) {
+        if (s === me) continue;
+        const grew = view.counts[s] - lastCountsArr[s];
+        if (grew >= 1) fx.push({ t: grew >= 2 ? 'draw2' : 'draw1', el: seatEls[s] });
+      }
+    }
 
     /* actions */
     const act = document.createElement('div');
@@ -561,6 +585,7 @@
       }
     }
 
+    el.__events = fx; // fresh array every render, even empty (pumpEvents contract)
     lastHandKey = handKey; lastTopKey = topKey; lastCountKey = countKey;
     lastHandArr = myHand.map((c) => (c ? { suit: c.suit, v: c.v } : null));
     lastDeckKey = deckKey;
@@ -589,7 +614,7 @@
   }
 
   const css = [
-    '.uno-wrap{display:flex;flex-direction:column;gap:14px;width:min(94vw,640px);margin:0 auto}',
+    '.uno-wrap{display:flex;flex-direction:column;gap:14px;width:min(100%,640px);margin:0 auto}',
     '.uno-table{width:min(100%,640px);aspect-ratio:640/430;container-type:inline-size;margin:0 auto;border-radius:4.0625cqw;position:relative;overflow:visible;background:radial-gradient(120% 140% at 50% 0%, #2b2622 0%, #211d1a 55%, #181512 100%);border:1px solid #c9c2ae;box-shadow:var(--shadow-md)}',
     '.uno-felt{position:absolute;left:12%;right:12%;top:13%;bottom:13%;border-radius:50%;background:radial-gradient(58% 46% at 50% 50%, rgba(255,236,214,.16), rgba(255,236,214,0) 70%), radial-gradient(120% 130% at 50% 22%, #b04a38 0%, #a34433 52%, #6f2718 100%);border:1.40625cqw solid #5e4327;box-shadow:0 8px 22px rgba(0,0,0,.35), inset 0 0 30px rgba(0,0,0,.4), inset 0 2px 6px rgba(255,255,255,.08)}',
     '.uno-pos{position:absolute;z-index:5;display:flex;justify-content:center;transform:translateY(-50%)}',
@@ -650,7 +675,7 @@
     '.uno-hand .uno-card{margin-left:-16px}',
     '.uno-hand .uno-card:first-child{margin-left:0}',
     '.uno-still{animation:none !important}',
-    '.uno-card{position:relative;width:52px;height:74px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#20242e;box-shadow:0 3px 8px rgba(28,33,30,.28);flex:0 0 auto;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1));animation:uno-deal .3s var(--ease-out) both;transition:transform .32s var(--ease-glide)}',
+    '.uno-card{position:relative;touch-action:manipulation;width:52px;height:74px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:#20242e;box-shadow:0 3px 8px rgba(28,33,30,.28);flex:0 0 auto;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1));animation:uno-deal .3s var(--ease-out) both;transition:transform .32s var(--ease-glide)}',
     '.uno-flycard{animation:none;width:44px;height:64px;position:absolute;left:0;top:0;z-index:60;pointer-events:none;box-shadow:0 4px 10px rgba(28,33,30,.4)}',
     '.uno-card::before{content:"";position:absolute;inset:0;border-radius:11px;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -3px 8px rgba(0,0,0,.28);pointer-events:none}',
     '.uno-oval{position:absolute;inset:19% 7%;background:#f7f2e5;border-radius:50%;transform:rotate(-16deg);box-shadow:inset 0 0 0 1.5px rgba(28,33,30,.14)}',
@@ -707,6 +732,7 @@
     '@keyframes uno-drawin{0%{opacity:0;transform:translate(-46px,-70px) rotate(-14deg) scale(.7)}100%{opacity:1;transform:rotate(var(--rot,0deg)) translateY(calc(var(--lift,0px) * -1)) scale(1)}}',
     '@keyframes note-fade{0%{opacity:0;transform:translate(-50%,8px)}12%{opacity:1;transform:translate(-50%,0)}72%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,-10px)}}',
     '@keyframes deck-pop{0%{transform:scale(.8)}60%{transform:scale(1.1)}100%{transform:scale(1)}}',
+    '@media (max-width:600px){.uno-wrap{gap:10px}.uno-hand{min-height:84px;padding-top:12px}.uno-hand .uno-card{width:46px;height:66px;margin-left:-14px}.uno-actions{gap:8px;min-height:34px}.uno-suitbtn{padding:8px 14px}}'
   ].join('\n');
 
   const game = {

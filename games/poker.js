@@ -77,7 +77,6 @@
       n: n, dealer: 0, turn: null, phase: 'preflop',
       board: [], deck: buildDeck(), pot: 0,
       lastBet: BB, minRaise: BB,
-      acted: new Array(n).fill(false),
       players: [], result: null
     };
     for (let i = 0; i < n; i++) {
@@ -93,14 +92,13 @@
     st.dealer = (st.dealer + 1) % st.n;
     for (const p of st.players) {
       if (p.stack < BB) p.stack = START; // broke players re-buy
-      p.bet = 0; p.totalBet = 0; p.folded = false; p.allIn = false;
+      p.bet = 0; p.totalBet = 0; p.folded = false; p.allIn = false; p.acted = false;
     }
     st.board = [];
     st.deck = buildDeck();
     st.pot = 0;
     st.lastBet = BB;
     st.minRaise = BB;
-    st.acted = new Array(st.n).fill(false);
     st.result = null;
     st.phase = 'preflop';
     dealHole(st);
@@ -120,8 +118,9 @@
     if (!st || st.result || st.phase === 'over' || st.turn !== seat) return [];
     const p = st.players[seat];
     if (!p || p.folded || p.allIn) return [];
-    const moves = [{ type: 'fold', actor: side }];
     const toCall = st.lastBet - p.bet;
+    const moves = [];
+    if (toCall > 0) moves.push({ type: 'fold', actor: side }); // fold only when facing a bet
     if (toCall <= 0) {
       moves.push({ type: 'check', actor: side });
     } else {
@@ -133,6 +132,11 @@
       for (let amount = minTotal; amount <= maxTotal; amount++) {
         moves.push({ type: 'raise', actor: side, amount: amount, paid: amount - p.bet, firstBet: st.lastBet === 0 });
       }
+    } else if (maxTotal > st.lastBet) {
+      // Short all-in: the whole stack is below the minimum raise but above
+      // the current bet. It is a legal all-in bet; applyMove's Math.max keeps
+      // minRaise unchanged, so it does not open re-raises (standard rules).
+      moves.push({ type: 'raise', actor: side, amount: maxTotal, paid: p.stack, firstBet: st.lastBet === 0 });
     }
     return moves;
   }
@@ -191,7 +195,10 @@
       return;
     }
 
-    if (remaining.every((i) => st.players[i].allIn) || st.phase === 'river') {
+    // Everyone all-in, or only one player can still act (no one left to bet
+    // against): the betting round cannot proceed — run the board out.
+    const canAct = remaining.filter((i) => !st.players[i].allIn);
+    if (canAct.length <= 1 || st.phase === 'river') {
       showdown(st);
       return;
     }
@@ -201,7 +208,7 @@
     else if (st.phase === 'turn') { st.phase = 'river'; st.board.push(st.deck.shift()); }
     st.lastBet = 0;
     st.minRaise = BB;
-    st.acted = new Array(st.n).fill(false);
+    for (const p of st.players) p.acted = false; // street changed: nobody has acted yet
     st.turn = firstActor(st);
   }
 
@@ -351,6 +358,9 @@
 
   function aiMove(st, side) {
     const seat = parseInt(side, 10);
+    // Per the contract: null when the side has no legal move, which includes
+    // being out of turn (legalMoves returns [] then). Callers must null-check.
+    if (!st || st.result || st.phase === 'over' || st.turn !== seat) return null;
     const p = st.players[seat];
     const moves = legalMoves(st, side);
     const toCall = st.lastBet - p.bet;
@@ -449,42 +459,48 @@
     const call = moves.find((m) => m.type === 'call');
     const raises = moves.filter((m) => m.type === 'raise');
 
-    addBtn('Fold', 'pkr-fold', () => opts.onMove(fold));
+    if (fold) addBtn('Fold', 'pkr-fold', () => opts.onMove(fold));
     if (check) addBtn('Check', '', () => opts.onMove(check));
     if (call) addBtn('Call ' + call.paid, 'pkr-call', () => opts.onMove(call));
     if (raises.length > 0) {
       const minR = raises[0];
       const maxR = raises[raises.length - 1];
-      const potR = raises.find((m) => m.amount >= view.pot);
-      addBtn('Min ' + minR.amount, '', () => opts.onMove(minR));
-      if (potR && potR.amount !== minR.amount && potR.amount !== maxR.amount) {
-        addBtn('Pot ' + potR.amount, '', () => opts.onMove(potR));
+      if (minR.amount === maxR.amount) {
+        // Exactly one raise size exists (full-stack minimum, or a short
+        // all-in): one button, no slider.
+        addBtn('All-in ' + maxR.amount, 'pkr-call', () => opts.onMove(maxR));
+      } else {
+        const potR = raises.find((m) => m.amount >= view.pot);
+        addBtn('Min ' + minR.amount, '', () => opts.onMove(minR));
+        if (potR && potR.amount !== minR.amount && potR.amount !== maxR.amount) {
+          addBtn('Pot ' + potR.amount, '', () => opts.onMove(potR));
+        }
+        addBtn('All-in ' + maxR.amount, 'pkr-call', () => opts.onMove(maxR));
+        const range = document.createElement('input');
+        range.type = 'range';
+        range.className = 'pkr-raise-range';
+        range.min = String(minR.amount);
+        range.max = String(maxR.amount);
+        range.step = '1';
+        const defVal = Math.max(minR.amount, Math.min(view.pot, maxR.amount));
+        range.value = String(defVal);
+        bar.appendChild(range);
+        const raiseBtn = document.createElement('button');
+        raiseBtn.className = 'btn pkr-call pkr-raise-btn';
+        raiseBtn.textContent = 'Raise to ' + defVal;
+        range.addEventListener('input', () => {
+          const v = parseInt(range.value, 10);
+          if (!Number.isNaN(v)) raiseBtn.textContent = 'Raise to ' + v;
+        });
+        raiseBtn.addEventListener('click', () => {
+          let v = parseInt(range.value, 10);
+          if (Number.isNaN(v)) v = defVal;
+          v = Math.max(minR.amount, Math.min(v, maxR.amount));
+          const m = raises.find((r) => r.amount === v);
+          if (m) opts.onMove(m);
+        });
+        bar.appendChild(raiseBtn);
       }
-      addBtn('All-in ' + maxR.amount, 'pkr-call', () => opts.onMove(maxR));
-      const range = document.createElement('input');
-      range.type = 'range';
-      range.className = 'pkr-raise-range';
-      range.min = String(minR.amount);
-      range.max = String(maxR.amount);
-      range.step = '1';
-      const defVal = Math.max(minR.amount, Math.min(view.pot, maxR.amount));
-      range.value = String(defVal);
-      bar.appendChild(range);
-      const raiseBtn = document.createElement('button');
-      raiseBtn.className = 'btn pkr-call pkr-raise-btn';
-      raiseBtn.textContent = 'Raise to ' + defVal;
-      range.addEventListener('input', () => {
-        const v = parseInt(range.value, 10);
-        if (!Number.isNaN(v)) raiseBtn.textContent = 'Raise to ' + v;
-      });
-      raiseBtn.addEventListener('click', () => {
-        let v = parseInt(range.value, 10);
-        if (Number.isNaN(v)) v = defVal;
-        v = Math.max(minR.amount, Math.min(v, maxR.amount));
-        const m = raises.find((r) => r.amount === v);
-        if (m) opts.onMove(m);
-      });
-      bar.appendChild(raiseBtn);
     }
     return bar;
   }
@@ -498,6 +514,7 @@
   let lastPhaseKey = '', lastFolded = null;
   let lastStackCnt = null; // per-seat chip count — piles re-drop only when the size changes
   let lastPotCnt = -1;     // pot chip count — pot pile re-drops when it grows/shrinks
+  let lastAllIn = null;    // per-seat all-in flag — allin FX fires only on the rising edge
 
   function motionOff() {
     try {
@@ -691,6 +708,13 @@
     const mySeat = parseInt(opts.mySide, 10);
     const over = !!view.result;
 
+    /* FX event diff — computed unconditionally (independent of the canFly()
+       flight gates below) so the pump still gets fresh events under the
+       click-test stub and reduced motion. */
+    const fx = [];
+    const handStart = view.phase === 'preflop' && (lastPhaseKey === '' || lastPhaseKey !== 'preflop');
+    const betPaidArr = lastBets ? view.players.map((p, i) => p.bet - lastBets[i]) : null;
+
     const ckey = (c) => c[0] + c[1];
     const me = view.players[mySeat];
     const boardKey = view.board.map(ckey).join(',');
@@ -719,6 +743,7 @@
     const felt = document.createElement('div');
     felt.className = 'pkr-felt';
     table.appendChild(felt);
+    if (handStart) fx.push({ t: 'deal', el: felt }); // new hand: blinds posted, hole cards dealt
 
     const mid = document.createElement('div');
     mid.className = 'pkr-mid';
@@ -760,7 +785,12 @@
       }
     }
     mid.appendChild(board);
-
+    if (!handStart && lastPhaseKey !== '' && view.phase !== lastPhaseKey && view.phase !== 'over') {
+      fx.push({ t: 'phase', el: board }); // street change: flop / turn / river cards land
+    }
+    if (view.phase === 'over' && lastPhaseKey !== 'over') {
+      fx.push({ t: 'showdown', el: board }); // silent sweep over the revealed table
+    }
     const pot = document.createElement('div');
     pot.className = 'pkr-pot';
     const potPile = document.createElement('div');
@@ -811,6 +841,9 @@
       pos.className = 'pkr-pos pkr-pos' + off;
       const se = seatEl(view, i, opts, { holeChanged, revealChanged, stackCnt: stackCntArr[i], stackChanged: !(lastStackCnt && lastStackCnt[i] === stackCntArr[i]) });
       seatEls[i] = pos;
+      if (lastFolded && foldedArr[i] && !lastFolded[i]) fx.push({ t: 'fold', el: pos }); // fold just happened
+      if (!handStart && betPaidArr && betPaidArr[i] > 0) fx.push({ t: 'bet', el: pos }); // chips left the stack
+      if (!handStart && view.players[i].allIn && !(lastAllIn && lastAllIn[i])) fx.push({ t: 'allin', el: pos });
       pos.appendChild(se);
       table.appendChild(pos);
     }
@@ -878,10 +911,12 @@
       el.appendChild(actionBar(view, opts));
     }
 
+    el.__events = fx; // fresh array every render, even empty (pumpEvents contract)
     lastBoardKey = boardKey; lastHoleKey = holeKey; lastRevealKey = revealKey;
     lastBoardLen = newLen; lastPotKey = potKey; lastBets = betsArr;
     lastPhaseKey = view.phase; lastFolded = foldedArr;
     lastStackCnt = stackCntArr; lastPotCnt = potCnt;
+    lastAllIn = view.players.map((p) => p.allIn);
   }
 
   function renderInfo(view, el, opts) {
@@ -1011,7 +1046,36 @@
     '.pkr-call{color:var(--green-deep);font-weight:700;border-color:#cfe0d3}',
     '.pkr-raise-range{width:130px;accent-color:var(--green);cursor:pointer}',
     '.pkr-raise-btn{min-width:104px}',
-    '@media(max-width:520px){.pkr-table{height:400px}.pkr-mid{transform:translate(-50%,-50%) scale(.78)}.pkr-pos0,.pkr-pos2{width:128px;margin-left:-64px}.pkr-pos1,.pkr-pos3{width:128px}}'
+    '@media (max-width:600px){.pkr-table{height:420px}',
+    '.pkr-mid{transform:translate(-50%,-50%);max-width:100%;gap:6px}',
+    '.pkr-mid .card-face{width:44px;height:64px;border-radius:8px}',
+    '.pkr-mid .card-face .cf-mid{font-size:20px}',
+    '.pkr-mid .card-face .cf-corner{font-size:11px}',
+    '.pkr-pos0{width:128px;margin-left:-64px}',
+    '.pkr-pos1{left:8px;top:8px;width:96px;transform:none}',
+    '.pkr-pos2{width:96px;margin-left:-48px;top:8px}',
+    '.pkr-pos3{right:8px;top:8px;width:96px;transform:none}',
+    '.pkr-pos .pkr-seat{padding:6px 8px;min-width:0;border-radius:10px}',
+    '.pkr-seat-head{margin-bottom:4px;min-height:16px}',
+    '.pkr-seat-name{font-size:11px}',
+    '.pkr-seat-cards{min-height:46px;gap:5px}',
+    '.pkr-seat.me .pkr-seat-cards{min-height:68px}',
+    '.pkr-pos .card-back.small{width:32px;height:46px}',
+    '.pkr-seat.me .card-face{width:48px;height:68px}',
+    '.pkr-seat.me .card-face .cf-mid{font-size:22px}',
+    '.pkr-seat-meta{margin-top:4px;min-height:16px}',
+    '.pkr-stack{font-size:12px}',
+    '.pkr-pot{gap:2px}',
+    '.pkr-potpile{min-height:18px}',
+    '.pkr-pot-empty{width:18px;height:18px}',
+    '.pkr-pot-num{font-size:12px}',
+    '.pkr-pot-lbl{font-size:8px}',
+    '.pkr-phase{font-size:9px;padding:2px 8px}',
+    '.pkr-actions{gap:8px;margin-top:12px;padding-top:12px}',
+    '.pkr-actions .btn{padding:8px 12px;font-size:13px}',
+    '.pkr-raise-range{width:104px}',
+    '.pkr-raise-btn{min-width:88px}',
+    '@media (max-width:360px){.pkr-pos1,.pkr-pos2,.pkr-pos3{width:76px}.pkr-pos1{left:4px}.pkr-pos2{margin-left:-38px}.pkr-pos3{right:4px}.pkr-pos .card-back.small{width:28px;height:40px}.pkr-pos .pkr-seat{padding:5px 6px}}'
   ].join('\n');
 
   const game = {

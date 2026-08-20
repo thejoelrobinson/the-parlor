@@ -75,6 +75,7 @@ class El {
     this._html = '';
     this.parentNode = null;
     this.listeners = Object.create(null);
+    this.attrs = Object.create(null);
     this.classList = {
       add: (...cs) => { const set = new Set(this._cs()); for (const c of cs) set.add(c); this.className = [...set].join(' '); },
       remove: (...cs) => { const set = new Set(this._cs()); for (const c of cs) set.delete(c); this.className = [...set].join(' '); },
@@ -104,6 +105,9 @@ class El {
     if (ls) for (const fn of ls.slice()) fn(e);
   }
   click() { this.dispatch('click'); }
+  setAttribute(k, v) { this.attrs[String(k)] = String(v); }
+  getAttribute(k) { const v = this.attrs[String(k)]; return v === undefined ? null : v; }
+  removeAttribute(k) { delete this.attrs[String(k)]; }
   all() {
     const out = [];
     const walk = (e) => { for (const c of e.children) { out.push(c); if (c.children) walk(c); } };
@@ -125,6 +129,7 @@ class El {
 
 const body = new El('body');
 const head = new El('head');
+const docListeners = Object.create(null);
 
 globalThis.document = {
   body,
@@ -134,7 +139,17 @@ globalThis.document = {
   getElementById: (id) => IdRegistry.get(String(id)) || null,
   querySelector: (s) => body.querySelector(s) || head.querySelector(s),
   querySelectorAll: (s) => body.querySelectorAll(s).concat(head.querySelectorAll(s)),
-  execCommand: () => true
+  execCommand: () => true,
+  // main.js registers one-time pointer/click listeners for audio unlock.
+  addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
+  removeEventListener: (t, fn) => {
+    const ls = docListeners[t];
+    if (ls) docListeners[t] = ls.filter((f) => f !== fn);
+  },
+  dispatch: (t, ev) => {
+    const ls = docListeners[t];
+    if (ls) for (const fn of ls.slice()) fn(ev || { type: t, target: null });
+  }
 };
 
 globalThis.window = globalThis;
@@ -191,6 +206,15 @@ const chatBox = add(body, mk('div', 'chat-box'));
 add(chatBox, mk('input', 'chat-in'));
 add(chatBox, mk('button', 'chat-send', 'btn'));
 add(body, mk('div', 'conn-pill', 'pill hidden'));
+// topbar audio controls (mirror index.html; wired in phase 2)
+const audioUi = add(body, mk('div', 'audio-ui', 'audio-ui'));
+add(audioUi, mk('button', 'btn-sound', 'audio-btn'));
+const eq = add(audioUi, mk('span', null, 'eq'));
+for (let i = 0; i < 3; i++) add(eq, mk('i'));
+const audioPop = add(body, mk('div', 'audio-pop', 'audio-pop hidden'));
+add(audioPop, mk('input', 'audio-vol', null, { type: 'range', min: '0', max: '100', value: '80' }));
+add(audioPop, mk('input', 'audio-music', null, { type: 'checkbox' }));
+add(audioPop, mk('input', 'audio-sfx', null, { type: 'checkbox' }));
 // overlay
 const overlay = add(body, mk('div', 'overlay', 'overlay hidden'));
 add(overlay, mk('div', 'overlay-icon', 'overlay-icon hidden'));
@@ -210,11 +234,41 @@ load('games/chess.js');
 load('games/checkers.js');
 load('games/uno.js');
 load('games/poker.js');
+load('fx/audio.js');
+load('fx/fx.js');
 load('main.js');
 
 if (!globalThis.Games || Object.keys(globalThis.Games).length < 4) {
   throw new Error('game modules did not register on window.Games');
 }
+
+/* ---------------- fx/audio spy ----------------
+ * fx/audio.js and fx/fx.js load before main.js (same order as index.html),
+ * so main.js's `A`/`F` constants are the real modules. In this stub both
+ * are inert internally (no AudioContext, no canvas 2d context), so we wrap
+ * the exported properties to record what the presentation layer asked for.
+ * That is exactly the pumpEvents → FX_EVENTS wiring in main.js. Particle
+ * kind behavior itself is covered by fx-test.js with a fake 2d context. */
+const AUD = globalThis.AUDIO;
+const FXM = globalThis.FX;
+if (!AUD || !FXM) throw new Error('fx modules did not register (window.AUDIO / window.FX missing)');
+const fxLog = { sfx: [], music: [], intensity: [], attaches: 0 };
+function fxReset() {
+  fxLog.sfx.length = 0; fxLog.music.length = 0; fxLog.intensity.length = 0; fxLog.attaches = 0;
+}
+function fxCount(list, name) { let c = 0; for (const x of list) if (x === name) c++; return c; }
+(function () {
+  const _play = AUD.play;
+  AUD.play = function (nm) { fxLog.sfx.push(nm); return _play.apply(this, arguments); };
+  const _start = AUD.music.start;
+  AUD.music.start = function (sc) { fxLog.music.push('start:' + sc); return _start.apply(this, arguments); };
+  const _stop = AUD.music.stop;
+  AUD.music.stop = function () { fxLog.music.push('stop'); return _stop.apply(this, arguments); };
+  const _int = AUD.music.setIntensity;
+  AUD.music.setIntensity = function (lvl) { fxLog.intensity.push(lvl); return _int.apply(this, arguments); };
+  const _attach = FXM.attach;
+  FXM.attach = function (c) { fxLog.attaches++; return _attach.apply(this, arguments); };
+})();
 
 /* ---------------- click drivers (the real UI path) ---------------- */
 const $id = (id) => document.getElementById(id);
@@ -403,6 +457,7 @@ function chessCaptureRun(pairs, fromName, toName, capPiece, label) {
     g.currentSide = (v) => { const r = oCS(v); console.error('[DBG] currentSide ->', r, 'turn=', v && v.turn); return r; };
   }
   try {
+    fxReset(); // this session's sfx log starts clean (boot menu music predates the spy)
     const card = document.querySelectorAll('.gcard').find((x) => x.dataset.game === 'chess');
     card.click();
     const opts = $id('setup-side').querySelectorAll('.side-opt');
@@ -431,6 +486,7 @@ function chessCaptureRun(pairs, fromName, toName, capPiece, label) {
     const got = v.board[sq(toName)];
     if (!got || got.p !== capPiece || got.c !== 'white') throw new Error(label + ': capturing piece not on target after click');
     if (v.board[sq(fromName)] !== null) throw new Error(label + ': attacker still on origin square after capture');
+    a(fxCount(fxLog.sfx, 'capture') >= 1, label + ': no "capture" sfx fired for a captured piece');
 
     // clean up so the next run starts from the menu
     $id('btn-leave').click();
@@ -460,13 +516,229 @@ try {
   console.log('PASS  ' + 'chess piece-capture click'.padEnd(24));
 } catch (e) { failures++; console.log('FAIL  ' + 'chess piece-capture click'.padEnd(24) + ' — ' + e.message); }
 
+/* ---------------- direct API assertions ----------------
+ * Rule/regression cases the random click matrix only hits by chance:
+ * castling rights, the FIDE b-file exception for O-O-O, threefold
+ * repetition, out-of-turn aiMove, and the poker betting-round edge cases
+ * (chip conservation, all-in runout, short all-in raise, per-player
+ * `acted` reset on street transitions). */
+function a(cond, msg) { if (!cond) throw new Error(msg); }
+function direct(label, fn) {
+  n++;
+  try { fn(); console.log('PASS  ' + label.padEnd(24)); }
+  catch (e) { failures++; console.log('FAIL  ' + label.padEnd(24) + ' — ' + e.message); }
+}
+
+// Craft a chess position from a piece list (name, piece, colour).
+function chessPos(pairs, castling) {
+  const g = globalThis.Games.chess;
+  const F = 'abcdefgh';
+  const sq = (nm) => (8 - parseInt(nm[1], 10)) * 8 + F.indexOf(nm[0]);
+  const st = g.newState();
+  st.board = new Array(64).fill(null);
+  for (const [nm, p, c] of pairs) st.board[sq(nm)] = { p: p, c: c };
+  st.castling = castling;
+  st.ep = -1;
+  st.turn = 'white';
+  st.halfmove = 0;
+  return st;
+}
+const NO_CASTLE = { wK: false, wQ: false, bK: false, bQ: false };
+
+direct('chess castling rights', () => {
+  const g = globalThis.Games.chess;
+  // white back rank is indices 56..63: e1=60, g1=62, c1=58
+  const hasOO = (st) => g.legalMoves(st, 'white').some((m) => m.from === 60 && m.to === 62);
+  // (a) a rook that left and came back does not restore the right
+  let st = g.newState();
+  g.applyMove(st, g.legalMoves(st, 'white').find((m) => m.from === 55 && m.to === 39)); // h4 (clears the rook's path)
+  g.applyMove(st, g.legalMoves(st, 'black').find((m) => m.from === 8 && m.to === 16)); // a6
+  g.applyMove(st, g.legalMoves(st, 'white').find((m) => m.from === 63 && m.to === 47)); // Rh3
+  g.applyMove(st, g.legalMoves(st, 'black').find((m) => m.from === 9 && m.to === 17)); // b6
+  g.applyMove(st, g.legalMoves(st, 'white').find((m) => m.from === 47 && m.to === 63)); // Rh1
+  // (f1/g1 are still occupied here, so the decisive fact is the cleared right)
+  a(st.castling.wK === false, 'wK right cleared when the h1 rook left, even though it returned');
+  // (b) rights present and f1/g1 clear -> O-O available
+  st = chessPos([['e1', 'k', 'white'], ['h1', 'r', 'white'], ['e8', 'k', 'black']],
+    { wK: true, wQ: false, bK: false, bQ: false });
+  a(hasOO(st), 'O-O available with fresh rights and clear f1/g1');
+  // (c) a rook that arrived by promotion brings no rights
+  st = chessPos([['e1', 'k', 'white'], ['h1', 'r', 'white'], ['e8', 'k', 'black']], NO_CASTLE);
+  a(!hasOO(st), 'O-O unavailable for a rook that arrived by promotion');
+});
+
+direct('chess O-O-O b-file hit', () => {
+  const g = globalThis.Games.chess;
+  const hasOOO = (st) => g.legalMoves(st, 'white').some((m) => m.from === 60 && m.to === 58);
+  const mk = (black) => chessPos(
+    [['e1', 'k', 'white'], ['a1', 'r', 'white'], ['e8', 'k', 'black']].concat(black),
+    { wK: false, wQ: true, bK: false, bQ: false });
+  // FIDE: only e1/d1/c1 may not be attacked — b1 may be
+  a(hasOOO(mk([['b8', 'r', 'black']])), 'O-O-O legal when only the b-file (b1) is attacked');
+  a(!hasOOO(mk([['d8', 'r', 'black']])), 'O-O-O illegal when d1 is attacked');
+  a(!hasOOO(mk([['b8', 'r', 'black'], ['c8', 'r', 'black']])), 'O-O-O illegal when c1 is attacked');
+});
+
+direct('chess threefold repeat', () => {
+  const g = globalThis.Games.chess;
+  const st = g.newState();
+  const play = (from, to) => {
+    const m = g.legalMoves(st, st.turn).find((m) => m.from === from && m.to === to);
+    if (!m) throw new Error('move not legal: ' + from + ' -> ' + to);
+    g.applyMove(st, m);
+  };
+  // Nb1c3 / Ng8f6 / Nc3d1 / Nf6g8: the start position recurs every 4 plies
+  play(57, 42); play(6, 21); play(42, 57); play(21, 6);
+  a(!g.outcome(st).over, 'no draw after one repetition cycle (2nd occurrence)');
+  play(57, 42); play(6, 21); play(42, 57); play(21, 6);
+  const o = g.outcome(st);
+  a(o.over && /threefold/.test(o.text), 'threefold draw on the 3rd occurrence, got: ' + (o.text || 'not over'));
+});
+
+direct('chess aiMove null paths', () => {
+  const g = globalThis.Games.chess;
+  // out of turn: no moves for that side
+  let st = g.newState();
+  a(g.aiMove(st, 'black') === null, 'aiMove null for out-of-turn side');
+  // stalemate: no legal move at all (contract: null, shell null-checks)
+  st = chessPos([['a1', 'k', 'white'], ['c1', 'k', 'black'], ['b3', 'q', 'black']], NO_CASTLE);
+  a(g.legalMoves(st, 'white').length === 0, 'stalemate position has no white move');
+  const o = g.outcome(st);
+  a(o.over && /stalemate/i.test(o.text), 'stalemate detected, got: ' + (o.text || 'not over'));
+  a(g.aiMove(st, 'white') === null, 'aiMove null with no legal move');
+});
+
+direct('uno aiMove out of turn', () => {
+  const g = globalThis.Games.uno;
+  reseed(7);
+  const st = g.newState();
+  const me = String(st.turn);
+  const other = st.turn === 0 ? '1' : '0';
+  a(g.legalMoves(st, other).length === 0, 'legalMoves is empty out of turn');
+  a(g.aiMove(st, other) === null, 'aiMove returns null out of turn');
+  const m = g.aiMove(st, me);
+  a(m !== null, 'aiMove returns a move in turn');
+  a(g.legalMoves(st, me).some((x) => JSON.stringify(x) === JSON.stringify(m)), 'aiMove move is legal');
+});
+
+direct('poker chip conservation', () => {
+  reseed(42);
+  const g = globalThis.Games.poker;
+  // pot already includes current-street bets, so the invariant is stacks + pot
+  const sum = (st) => st.players.reduce((t, p) => t + p.stack, 0) + st.pot;
+  const st = g.newState();
+  a(sum(st) === 400, 'chips conserved at start (' + sum(st) + ')');
+  g.applyMove(st, { type: 'raise', actor: '0', amount: 40, paid: 30, firstBet: false });
+  a(sum(st) === 400, 'chips conserved after SB raise');
+  g.applyMove(st, { type: 'raise', actor: '1', amount: 200, paid: 180, firstBet: false });
+  a(st.players[1].allIn, 'BB all-in after raising to 200');
+  a(sum(st) === 400, 'chips conserved after BB all-in');
+  g.applyMove(st, { type: 'call', actor: '0', paid: 160 });
+  a(st.phase === 'over', 'runout settled the hand');
+  a(st.board.length === 5, 'board ran out to 5 (' + st.board.length + ')');
+  a(st.pot === 0, 'pot distributed at showdown');
+  a(sum(st) === 400, 'chips conserved at hand end (' + sum(st) + ')');
+});
+
+direct('poker all-in runout', () => {
+  reseed(43);
+  const g = globalThis.Games.poker;
+  const sum = (st) => st.players.reduce((t, p) => t + p.stack, 0) + st.pot;
+  const st = g.newState([0, 1, 2, 3]);
+  a(st.n === 4, 'four-player table');
+  st.phase = 'turn';
+  st.board = [st.deck.shift(), st.deck.shift(), st.deck.shift()];
+  for (const p of st.players) { p.bet = 100; p.totalBet = 100; p.stack = 100; p.allIn = true; p.acted = true; }
+  st.pot = 400; st.lastBet = 100; st.turn = 3;
+  st.players[3].allIn = false;
+  a(sum(st) === 800, 'chips conserved in setup (' + sum(st) + ')');
+  g.applyMove(st, { type: 'check', actor: '3' });
+  a(st.phase === 'over', 'single active player -> immediate runout, got ' + st.phase);
+  a(st.board.length === 5, 'board ran out to 5');
+  a(sum(st) === 800, 'chips conserved after showdown (' + sum(st) + ')');
+});
+
+direct('poker short all-in', () => {
+  reseed(44);
+  const g = globalThis.Games.poker;
+  const st = g.newState();
+  st.lastBet = 30; st.minRaise = 20;
+  st.players[1].bet = 25; st.players[1].stack = 10; st.players[1].totalBet = 25;
+  st.turn = 1;
+  const mv = g.legalMoves(st, '1');
+  const rs = mv.filter((m) => m.type === 'raise');
+  a(rs.length === 1, 'exactly one raise option (short all-in), got ' + rs.length);
+  a(rs[0].amount === 35 && rs[0].paid === 10, 'short all-in is 35 paid 10, got ' + JSON.stringify(rs[0]));
+  a(mv.some((m) => m.type === 'call'), 'call still offered');
+  g.applyMove(st, { type: 'raise', actor: '1', amount: 35, paid: 10, firstBet: false });
+  a(st.players[1].allIn && st.lastBet === 35, 'applied: all-in, lastBet 35');
+  a(st.minRaise === 20, 'minRaise unchanged — short all-in does not open re-raises');
+});
+
+direct('poker street acted reset', () => {
+  reseed(45);
+  const g = globalThis.Games.poker;
+  const st = g.newState(); // heads-up: dealer/SB acts first, BB faces 10
+  g.applyMove(st, { type: 'call', actor: '0', paid: 10 });
+  a(st.phase === 'preflop' && st.turn === 1, 'BB to act preflop');
+  g.applyMove(st, { type: 'check', actor: '1' });
+  a(st.phase === 'flop', 'flop dealt, got ' + st.phase);
+  a(st.turn === 0, 'dealer acts first postflop');
+  g.applyMove(st, { type: 'check', actor: '0' });
+  a(st.phase === 'flop' && st.turn === 1,
+    'street did NOT skip after the first check (per-player acted reset), got ' + st.phase + '/' + st.turn);
+  g.applyMove(st, { type: 'check', actor: '1' });
+  a(st.phase === 'turn', 'turn reached only after both players acted');
+});
+
+/* ---------------- per-run fx/audio assertions ----------------
+ * Verify each session actually fired the expected sfx, music, and FX
+ * wiring. The event→sfx table lives in main.js (FX_EVENTS), pumped from
+ * the `el.__events` array each game render sets; counts below are
+ * deterministic under the fixed per-run seeds. Terminal tones: chess
+ * emits a mate/draw board sting (which suppresses the overlay tone),
+ * while checkers/uno/poker have no terminal board event so the overlay
+ * tone always plays. */
+function fxExpect(spec, r) {
+  const sfxCount = (nm) => fxCount(fxLog.sfx, nm);
+  const has = (nm, min) => a(sfxCount(nm) >= min,
+    spec.game + ': expected sfx "' + nm + '" at least ' + min + 'x, got ' + sfxCount(nm));
+  const resultTones = () => sfxCount('win') + sfxCount('lose') + sfxCount('draw');
+  a(fxLog.attaches >= 1, spec.game + ': FX.attach was never called for the board');
+  a(fxLog.music.indexOf('start:' + spec.game) >= 0,
+    spec.game + ': music.start("' + spec.game + '") was never called');
+  a(fxCount(fxLog.music, 'stop') >= 1, spec.game + ': music.stop() was never called');
+  a(fxLog.intensity.length >= 1, spec.game + ': music.setIntensity was never called while rendering');
+  if (spec.game === 'chess') {
+    has('move', 1);
+    if (r.how === 'over') a(sfxCount('mate') + sfxCount('draw') >= 1,
+      'chess: game ended but no mate/draw terminal sting was played');
+  } else if (spec.game === 'checkers') {
+    has('deal', 1); has('move', 1); has('capture', 1);
+    if (r.how === 'over') a(resultTones() >= 1, 'checkers: game ended but no win/lose/draw result tone was played');
+  } else if (spec.game === 'uno') {
+    has('deal', 1); has('flip', 1);
+    if (r.how === 'over') a(resultTones() >= 1, 'uno: game ended but no win/lose result tone was played');
+  } else if (spec.game === 'poker') {
+    const hands = r.hands || 0;
+    a(hands >= 1, 'poker: no hand finished');
+    has('deal', hands);
+    a(resultTones() >= hands,
+      'poker: expected a result tone for each of the ' + hands + ' finished hand(s), got ' + resultTones());
+    if (hands >= 3) a(sfxCount('chip') + sfxCount('allin') >= 3,
+      'poker: expected a bet sound (chip/all-in) in each of the 3 hands');
+  }
+}
+
 for (const spec of RUNS) {
   for (const side of spec.sides) {
     for (let s = 0; s < spec.seeds; s++) {
       n++;
       const label = spec.game + ' [' + side + '] seed' + s;
       try {
+        fxReset(); // boot menu music and any prior run are out of scope
         const r = playGame(spec, side, n * 7919 + 13);
+        fxExpect(spec, r);
         console.log('PASS  ' + label.padEnd(24) + ' plies=' + r.plies +
           (r.hands ? ' hands=' + r.hands : '') + ' ' + r.how + (r.rematched ? ' (rematch exercised)' : ''));
       } catch (e) {
