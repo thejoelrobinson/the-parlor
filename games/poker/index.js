@@ -1,0 +1,185 @@
+/* games/poker/index.js — Poker: css + game manifest. Registers global.Games['poker']. */
+(function (global) {
+  'use strict';
+
+  const L = global.PARLOR['poker'].logic;
+  const V = global.PARLOR['poker'].view;
+  const { sideName, newState, currentSide, legalMoves, applyMove, outcome, viewFor, aiMove, describeMove, nextHand } = L;
+  const { render, renderInfo } = V;
+
+  /* ---------- css (pkr- prefix) ---------- */
+
+  const css = [
+    '.pkr-table{width:min(100%,660px);height:470px;margin:0 auto;border-radius:26px;position:relative;overflow:visible;',
+    'background:radial-gradient(120% 140% at 50% 0%, #24443a 0%, #1b332c 55%, #14271f 100%);',
+    'border:1px solid #c9c2ae;box-shadow:var(--shadow-md)}',
+    '.pkr-felt{position:absolute;left:13%;right:13%;top:14%;bottom:14%;border-radius:50%;',
+    'background:radial-gradient(120% 130% at 50% 22%, #1e6b43 0%, #16683f 52%, var(--green-deep) 100%);',
+    'border:9px solid #5e4327;box-shadow:0 8px 22px rgba(0,0,0,.35), inset 0 0 30px rgba(0,0,0,.4), inset 0 2px 6px rgba(255,255,255,.08)}',
+    '.pkr-pos{position:absolute;z-index:5;display:flex;justify-content:center;transform:translateY(-50%)}',
+    '.pkr-pos .pkr-seat{width:100%;max-width:152px}',
+    '.pkr-pos0{left:50%;bottom:0;top:auto;margin-left:-76px;width:152px;transform:none}',
+    '.pkr-pos1{left:0;top:50%;width:154px}',
+    '.pkr-pos2{left:50%;top:0;margin-left:-76px;width:152px;transform:none}',
+    '.pkr-pos3{right:0;top:50%;width:154px}',
+    '.pkr-seat{background:var(--surface);border:1px solid var(--hair-strong);border-radius:14px;',
+    'padding:8px 10px;min-width:112px;text-align:center;box-shadow:0 3px 10px rgba(0,0,0,.3)}',
+    '.pkr-seat.active{outline:2px solid #ffd97a;outline-offset:2px;animation:pkr-turn-glow 1.6s ease-in-out infinite}',
+    '@keyframes pkr-turn-glow{0%,100%{box-shadow:0 3px 10px rgba(0,0,0,.3), 0 0 0 0 rgba(255,217,122,0)}50%{box-shadow:0 3px 10px rgba(0,0,0,.3), 0 0 0 7px rgba(255,217,122,.25)}}',
+    '.pkr-seat.folded{opacity:.55}',
+    '.pkr-seat.winner{outline:2px solid var(--gold);outline-offset:1px}',
+    '.pkr-seat-head{display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:6px;min-height:18px}',
+    '.pkr-seat-name{font-size:12px;font-weight:700;color:var(--ink-soft);letter-spacing:.02em}',
+    '.pkr-dealer{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;',
+    'background:var(--gold);color:#fff;font-family:var(--font-display);font-size:11px;font-weight:700;',
+    'box-shadow:0 1px 3px rgba(28,33,30,.25)}',
+    '.pkr-blind{font-size:9px;font-weight:800;letter-spacing:.1em;color:#fff;background:rgba(0,0,0,.28);border-radius:6px;padding:1px 5px}',
+    '.pkr-seat-cards{display:flex;gap:6px;justify-content:center;align-items:center;min-height:52px;perspective:600px}',
+    '.pkr-seat.me .pkr-seat-cards{min-height:80px}',
+    '.pkr-dim{opacity:.4;transform:scale(.92)}',
+    '.pkr-seat-meta{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:6px;min-height:18px}',
+    '.pkr-stack{font-family:var(--font-display);font-weight:600;font-size:14px;color:var(--ink)}',
+    '.pkr-chip{position:relative;display:inline-block;width:18px;height:18px;flex:none;border-radius:50%;',
+    'background:radial-gradient(circle, var(--chip,#c29330) 0 42%, rgba(255,255,255,.92) 42% 47%, rgba(0,0,0,.14) 47% 49%, transparent 49%),',
+    'repeating-conic-gradient(rgba(255,255,255,.95) 0 18deg, var(--chip,#c29330) 18deg 45deg);',
+    'box-shadow:0 1px 2px rgba(0,0,0,.4), inset 0 0 0 1px rgba(0,0,0,.18)}',
+    '.pkr-chip.big{width:22px;height:22px}',
+    '.pkr-chip.mini{width:12px;height:12px}',
+    '.pkr-pile{display:inline-flex;flex-direction:column;align-items:center;justify-content:flex-end}',
+    '.pkr-pile .pkr-chip{margin-top:-13px}',
+    '.pkr-pile .pkr-chip:first-child{margin-top:0}',
+    '.pkr-pile .pkr-chip.big{margin-top:-16px}',
+    '.pkr-pile .pkr-chip.big:first-child{margin-top:0}',
+    '.pkr-pile .pkr-chip.mini{margin-top:-8px}',
+    '.pkr-pile .pkr-chip.mini:first-child{margin-top:0}',
+    '.pkr-pile.pkr-still .pkr-chip{animation:none}',
+    '.pkr-pile-in .pkr-chip{animation:pkr-chip-drop .3s var(--ease-spring) both}',
+    '@keyframes pkr-chip-drop{from{opacity:0;transform:translateY(-9px) scale(.5)}to{opacity:1;transform:translateY(0) scale(1)}}',
+    '.pkr-bet{display:inline-flex;align-items:center;gap:4px;min-width:26px;min-height:18px;font-size:12px;font-weight:800;color:var(--ink);',
+    'animation:chip-in .28s var(--ease-out) both}',
+    '.pkr-tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}',
+    '.pkr-tag.pkr-win{color:var(--gold);font-weight:800}',
+    '.pkr-mid{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:10px;max-width:86%}',
+    '.pkr-board{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;perspective:600px}',
+    '.pkr-empty{opacity:.25;border-style:dashed;background:rgba(255,255,255,.5)}',
+    '.pkr-flip{animation:card-flip .42s var(--ease-spring) both;backface-visibility:hidden}',
+    '.pkr-still{animation:none !important}',
+    '.pkr-pot{display:flex;flex-direction:column;align-items:center;gap:3px}',
+    '.pkr-potpile{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-height:24px}',
+    '.pkr-pot-empty{width:22px;height:22px;border-radius:50%;border:2px dashed rgba(255,255,255,.3)}',
+    '.pkr-pot-num{color:#fff;font-family:var(--font-display);font-weight:700;font-size:13px;background:rgba(0,0,0,.34);',
+    'border-radius:9px;padding:1px 9px;text-shadow:0 1px 2px rgba(0,0,0,.45)}',
+    '.pkr-pot-lbl{font-size:9px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.75)}',
+    '.pkr-potpile.pkr-pot-pop{animation:pot-pop .32s var(--ease-spring) both}',
+    '.pkr-phase{font-size:10px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:rgba(255,255,255,.85);',
+    'background:rgba(0,0,0,.28);border-radius:8px;padding:3px 10px;animation:pkr-phase-in .3s var(--ease-out) both}',
+    '.pkr-result{font-family:var(--font-display);font-weight:700;font-size:clamp(15px,3.4vw,19px);color:#fff;',
+    'text-shadow:0 1px 4px rgba(0,0,0,.4);max-width:100%;text-align:center;animation:pkr-result-in .5s var(--ease-spring) both}',
+    '@keyframes pkr-phase-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
+    '@keyframes pkr-result-in{0%{opacity:0;transform:scale(1.35)}60%{opacity:1;transform:scale(.97)}100%{opacity:1;transform:scale(1)}}',
+    '.pkr-fly{position:absolute;left:0;top:0;z-index:60;display:flex;align-items:center;justify-content:center;',
+    'width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;',
+    'background:radial-gradient(circle, #c29330 0 42%, rgba(255,255,255,.92) 42% 47%, rgba(0,0,0,.14) 47% 49%, transparent 49%),',
+    'repeating-conic-gradient(rgba(255,255,255,.95) 0 18deg, #c29330 18deg 45deg);',
+    'color:#fff;font-size:9px;font-weight:800;text-shadow:0 1px 2px rgba(90,60,5,.65);',
+    'box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 0 0 1px rgba(0,0,0,.18);pointer-events:none}',
+    '.pkr-deck{position:absolute;left:20%;top:68%;z-index:1}',
+    '.pkr-deckcard{width:40px;height:56px;border-radius:7px}',
+    '.pkr-deckcard:nth-child(2){transform:translate(4px,-3px)}',
+    '.pkr-deckcard:nth-child(3){transform:translate(8px,-6px)}',
+    '.pkr-flycard{position:absolute;left:0;top:0;z-index:60;width:36px;height:52px;margin:-26px 0 0 -18px;border-radius:8px;',
+    'background:#fffdf9;border:1px solid #d8d2c4;box-shadow:0 3px 8px rgba(28,33,30,.35);',
+    'display:flex;align-items:center;justify-content:center;pointer-events:none}',
+    '.pkr-flycard .fc-mid{font-family:var(--font-display);font-weight:700;font-size:16px;color:#20242a}',
+    '.pkr-flycard.pkr-red .fc-mid{color:#8e2f23}',
+    '.pkr-seat.win-pop{animation:pkr-win-pop .6s var(--ease-spring) .1s both}',
+    '@keyframes pkr-win-pop{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}',
+    '.pkr-foldbeat{animation:pkr-foldbeat .4s var(--ease-out) both}',
+    '@keyframes pkr-foldbeat{from{opacity:1;transform:scale(1)}to{opacity:.4;transform:scale(.92)}}',
+    '.pkr-board .card-face:nth-child(2){animation-delay:.05s}',
+    '.pkr-board .card-face:nth-child(3){animation-delay:.1s}',
+    '.pkr-board .card-face:nth-child(4){animation-delay:.15s}',
+    '.pkr-board .card-face:nth-child(5){animation-delay:.2s}',
+    '.pkr-red .cf-corner,.pkr-red .cf-mid{color:#8e2f23}',
+    '.pkr-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:16px;',
+    'padding-top:14px;border-top:1px dashed var(--hair-strong)}',
+    '.pkr-actions .btn{border-radius:10px}',
+    '.pkr-fold{color:var(--brick);border-color:#e3d0c9}',
+    '.pkr-call{color:var(--green-deep);font-weight:700;border-color:#cfe0d3}',
+    '.pkr-raise-range{width:130px;accent-color:var(--green);cursor:pointer}',
+    '.pkr-raise-btn{min-width:104px}',
+    '@media (max-width:600px){.pkr-table{height:420px}',
+    '.pkr-mid{transform:translate(-50%,-50%);max-width:100%;gap:6px}',
+    '.pkr-mid .card-face{width:44px;height:64px;border-radius:8px}',
+    '.pkr-mid .card-face .cf-mid{font-size:20px}',
+    '.pkr-mid .card-face .cf-corner{font-size:11px}',
+    '.pkr-pos0{width:128px;margin-left:-64px}',
+    '.pkr-pos1{left:8px;top:8px;width:96px;transform:none}',
+    '.pkr-pos2{width:96px;margin-left:-48px;top:8px}',
+    '.pkr-pos3{right:8px;top:8px;width:96px;transform:none}',
+    '.pkr-pos .pkr-seat{padding:6px 8px;min-width:0;border-radius:10px}',
+    '.pkr-seat-head{margin-bottom:4px;min-height:16px}',
+    '.pkr-seat-name{font-size:11px}',
+    '.pkr-seat-cards{min-height:46px;gap:5px}',
+    '.pkr-seat.me .pkr-seat-cards{min-height:68px}',
+    '.pkr-pos .card-back.small{width:32px;height:46px}',
+    '.pkr-seat.me .card-face{width:48px;height:68px}',
+    '.pkr-seat.me .card-face .cf-mid{font-size:22px}',
+    '.pkr-seat-meta{margin-top:4px;min-height:16px}',
+    '.pkr-stack{font-size:12px}',
+    '.pkr-pot{gap:2px}',
+    '.pkr-potpile{min-height:18px}',
+    '.pkr-pot-empty{width:18px;height:18px}',
+    '.pkr-pot-num{font-size:12px}',
+    '.pkr-pot-lbl{font-size:8px}',
+    '.pkr-phase{font-size:9px;padding:2px 8px}',
+    '.pkr-actions{gap:8px;margin-top:12px;padding-top:12px}',
+    '.pkr-actions .btn{padding:8px 12px;font-size:13px}',
+    '.pkr-raise-range{width:104px}',
+    '.pkr-raise-btn{min-width:88px}',
+    '@media (max-width:360px){.pkr-pos1,.pkr-pos2,.pkr-pos3{width:76px}.pkr-pos1{left:4px}.pkr-pos2{margin-left:-38px}.pkr-pos3{right:4px}.pkr-pos .card-back.small{width:28px;height:40px}.pkr-pos .pkr-seat{padding:5px 6px}}'
+  ].join('\n');
+
+  const game = {
+    id: 'poker',
+    title: 'Poker',
+    blurb: 'Texas Hold\'em: blinds, betting rounds, side pots, and showdown. Bluff if you dare.',
+    hint: 'Act when your seat glows: fold, check, call, or raise.',
+    sideList: ['0', '1', '2', '3'],
+    pickSide: false,
+    sideName,
+    localConfigs() { return [{ kind: 'human' }, { kind: 'bot' }, { kind: 'bot' }, { kind: 'bot' }]; },
+    intensity(view) {
+      let lvl = 1, minStack = Infinity;
+      if (view && Array.isArray(view.players)) {
+        for (const p of view.players) {
+          if (!p) continue;
+          if (p.allIn) lvl = 3;
+          if (!p.folded && !p.allIn && p.stack > 0 && p.stack < minStack) minStack = p.stack;
+        }
+      }
+      if (lvl < 2 && view && view.result) lvl = 2;
+      else if (lvl < 2 && view && view.pot && minStack !== Infinity && view.pot >= minStack / 2) lvl = 2;
+      return lvl;
+    },
+    resultIcon: '<span class="gicon-glyph">\u2660</span>',
+    resultTone(text, mySide) { const mine = this.sideName(mySide); return text.indexOf(mine + ' wins') >= 0 ? 'win' : 'lose'; },
+    confetti: false, // hands end constantly: icon only
+    css,
+    newState,
+    currentSide,
+    legalMoves,
+    applyMove,
+    outcome,
+    viewFor,
+    aiMove,
+    describeMove,
+    render,
+    renderInfo,
+    nextHand
+  };
+
+  global.Games = global.Games || {};
+  global.Games['poker'] = game;
+  if (typeof module !== 'undefined' && module.exports) module.exports = game;
+})(typeof window !== 'undefined' ? window : globalThis);

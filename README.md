@@ -1,6 +1,6 @@
 # ♟ The Parlor
 
-Four classic games in your browser — **Chess, Checkers, UNO, and Poker (Texas Hold'em)** —
+Five classic games in your browser — **Chess, Checkers, UNO, Poker (Texas Hold'em), and Catan (simplified)** —
 with no installs, no accounts, and no server:
 
 - **vs Computer** — play any game against a built-in AI opponent.
@@ -53,17 +53,21 @@ short ICE-gathering wait and then reported as a failed connection rather than ha
 | Checkers | 8×8 draughts: mandatory captures, multi-jumps, crowning kings. AI: minimax, 6-ply search (root + 5). |
 | UNO | 108-card deck, skips, reverses, +2, wild & wild+4. 2 players (P2P) or you + 3 bots (local). Reverse = skip in 2-player games. |
 | Poker | Texas Hold'em: blinds 10/20, stacks 200, full betting rounds, all-ins & **side pots**, showdown hand evaluation. You + 3 bots (local) or 2-player (P2P). AI is heuristic (made hand, draws, pot odds, occasional bluffs). |
+| Catan | Simplified 2-player Catan: 7 hexes, 12 building sites, settlements & cities, 3-for-1 trades, first to 5 VP wins. No robber, roads, or dev cards. AI: greedy (upgrade, build on the best hex, trade when it unlocks). |
 
 ## How it works
 
 - `index.html` + `styles.css` — UI shell & theme (screen transitions, board
   "iris-in", living menu cards, shake keyframes — all transform/opacity only)
-- `p2p.js` — WebRTC data channel with copy-paste signaling
-- `main.js` — menu, local sessions, P2P session logic (host-authoritative: the
-  guest sends moves, the host validates them and broadcasts hidden-safe views,
-  so hands/cards stay secret in UNO & poker); also pumps each game's FX events
-  into sound and particles
-- `games/*.js` — one self-contained module per game (pure logic + rendering)
+- `core/ui.js` — shared DOM/animation helpers (FLIP board transitions, player rows)
+- `core/p2p.js` — WebRTC data channel with copy-paste signaling
+- `core/session.js` — session logic: local bot games and P2P play (host-authoritative:
+  the guest sends moves, the host validates and broadcasts hidden-safe views, so
+  hands/cards stay secret in UNO & poker); also pumps each game's FX events into
+  sound and particles
+- `main.js` — menu and boot wiring
+- `games/<id>/` — one directory per game, three files: `logic.js` (pure rules + AI),
+  `view.js` (DOM render), `index.js` (css + manifest). See `CONTRACT.md`.
 - `fx/audio.js` — procedural Web Audio music & sound effects (see below)
 - `fx/fx.js` — canvas-2d particle layer + screen shake (see below)
 - `CONTRACT.md` — the interface contract the game modules implement
@@ -155,7 +159,7 @@ Run the Node suites first (all must be green), then in a browser:
 ## Tests (Node, no browser needed)
 
 ```
-node click-test.js    # 23 seeded AI-vs-AI games across all 4 games, with FX/audio wiring assertions
+node click-test.js    # 27 seeded AI-vs-AI games across all 5 games, with FX/audio wiring assertions
 node audio-test.js    # unit tests for the audio module (scene tables, scheduling, settings, Node no-ops)
 node fx-test.js       # unit tests for the particle layer (headless no-ops + fake-canvas behavior)
 ```

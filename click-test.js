@@ -171,7 +171,7 @@ function add(parent, e) { parent.appendChild(e); return e; }
 for (const id of ['screen-menu', 'screen-setup', 'screen-connect', 'screen-game']) {
   add(body, mk('section', id, 'screen hidden'));
 }
-for (const g of ['chess', 'checkers', 'uno', 'poker']) {
+for (const g of ['chess', 'checkers', 'uno', 'poker', 'catan']) {
   add(body, mk('div', null, 'gcard', { dataset: { game: g } }));
 }
 // setup screen
@@ -229,11 +229,24 @@ function load(rel) {
   const f = path.join(__dirname, rel);
   vm.runInThisContext(fs.readFileSync(f, 'utf8'), { filename: f });
 }
-load('p2p.js');
-load('games/chess.js');
-load('games/checkers.js');
-load('games/uno.js');
-load('games/poker.js');
+load('core/ui.js');
+load('core/p2p.js');
+load('core/session.js');
+load('games/chess/logic.js');
+load('games/chess/view.js');
+load('games/chess/index.js');
+load('games/checkers/logic.js');
+load('games/checkers/view.js');
+load('games/checkers/index.js');
+load('games/uno/logic.js');
+load('games/uno/view.js');
+load('games/uno/index.js');
+load('games/poker/logic.js');
+load('games/poker/view.js');
+load('games/poker/index.js');
+load('games/catan/logic.js');
+load('games/catan/view.js');
+load('games/catan/index.js');
 load('fx/audio.js');
 load('fx/fx.js');
 load('main.js');
@@ -332,6 +345,19 @@ function clickPoker() {
   b.click();
 }
 
+function clickCatan() {
+  const board = boardEl();
+  const cityCan = board.querySelectorAll('.cat-site').find((e) => e.classList.contains('city-can'));
+  if (cityCan) { cityCan.click(); return; }
+  const build = board.querySelectorAll('.cat-site.can')[0];
+  if (build) { build.click(); return; }
+  const trade = board.querySelectorAll('.cat-trade.can')[0];
+  if (trade) { trade.click(); return; }
+  const end = board.querySelector('.cat-end');
+  if (end) { end.click(); return; }
+  throw new Error('catan: no actionable control rendered on my turn');
+}
+
 /* ---------------- play one full session ---------------- */
 function playGame(spec, side, seedBase) {
   reseed(seedBase);
@@ -387,6 +413,7 @@ function playGame(spec, side, seedBase) {
     const before = cap.last ? JSON.stringify(cap.last.view) : null;
     if (spec.game === 'chess' || spec.game === 'checkers') clickBoard(spec.game);
     else if (spec.game === 'uno') clickUno();
+    else if (spec.game === 'catan') clickCatan();
     else clickPoker();
     if (!cap.last) throw new Error(spec.game + ': no render after click');
     const after = JSON.stringify(cap.last.view);
@@ -410,7 +437,8 @@ const RUNS = [
   { game: 'chess', sides: ['white', 'black'], plies: 400, seeds: 2 },
   { game: 'checkers', sides: ['red', 'black'], plies: 300, seeds: 2 },
   { game: 'uno', sides: ['0'], plies: 600, seeds: 2 },
-  { game: 'poker', sides: ['0'], hands: 3, plies: 400, seeds: 2 }
+  { game: 'poker', sides: ['0'], hands: 3, plies: 400, seeds: 2 },
+  { game: 'catan', sides: ['0', '1'], plies: 300, seeds: 2 }
 ];
 
 let failures = 0;

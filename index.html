@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="The Parlor — chess, checkers, UNO, and Texas Hold'em. Play the computer or a friend over peer-to-peer WebRTC. No server, no sign-in.">
+<meta name="description" content="The Parlor — chess, checkers, UNO, Texas Hold'em, and Catan. Play the computer or a friend over peer-to-peer WebRTC. No server, no sign-in.">
 <meta name="theme-color" content="#f5f3ed">
-<title>The Parlor — Chess · Checkers · UNO · Poker</title>
+<title>The Parlor — Chess · Checkers · UNO · Poker · Catan</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%231c211e'/><g fill='%23c29330' transform='translate(14 14) scale(1.125)'><circle cx='32' cy='14' r='9.5'/><path d='M27 21.5h10v5H27z'/><rect x='19.5' y='26.5' width='25' height='6' rx='3'/><path d='M24.5 32.5 17.5 52h29L39.5 32.5z'/><rect x='12.5' y='54' width='39' height='8' rx='3.5'/></g></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,7 +17,7 @@
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark"><svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><circle cx="32" cy="14" r="9.5"/><path d="M27 21.5h10v5H27z"/><rect x="19.5" y="26.5" width="25" height="6" rx="3"/><path d="M24.5 32.5 17.5 52h29L39.5 32.5z"/><rect x="12.5" y="54" width="39" height="8" rx="3.5"/></svg></span>The Parlor
-    <span class="sub">chess · checkers · UNO · poker — against the computer, or peer-to-peer</span>
+    <span class="sub">chess · checkers · UNO · poker · catan — against the computer, or peer-to-peer</span>
   </div>
   <div class="topbar-right">
     <div id="conn-pill" class="pill hidden"></div>
@@ -46,7 +46,7 @@
 <main>
   <!-- ============ MENU ============ -->
   <section id="screen-menu" class="screen">
-    <p class="eyebrow">Four games · two ways to play</p>
+    <p class="eyebrow">Five games · two ways to play</p>
     <h1>Pick a game</h1>
     <p class="muted">Play against the computer, or link up with a friend peer-to-peer.<br>
     <span class="fine">Peer-to-peer runs directly between two browsers over WebRTC. You swap two short codes —
@@ -69,6 +69,10 @@
       <div class="gcard" data-game="poker">
         <div class="gicon"><span class="gicon-glyph">♠</span></div><h2>Poker</h2>
         <p>Texas Hold'em: blinds, betting rounds, side pots, and showdown. Bluff if you dare.</p>
+      </div>
+      <div class="gcard" data-game="catan">
+        <div class="gicon"><svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><path d="M32 6 54.5 19v26L32 58 9.5 45V19z" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="32" cy="24" r="4.5"/><circle cx="32" cy="42" r="4.5"/></svg></div><h2>Catan</h2>
+        <p>Settle the island. Roll, gather wheat, lumber, brick and ore — first to 5 points wins.</p>
       </div>
     </div>
   </section>
@@ -167,11 +171,24 @@
   </div>
 </div>
 
-<script src="p2p.js"></script>
-<script src="games/chess.js"></script>
-<script src="games/checkers.js"></script>
-<script src="games/uno.js"></script>
-<script src="games/poker.js"></script>
+<script src="core/ui.js"></script>
+<script src="core/p2p.js"></script>
+<script src="core/session.js"></script>
+<script src="games/chess/logic.js"></script>
+<script src="games/chess/view.js"></script>
+<script src="games/chess/index.js"></script>
+<script src="games/checkers/logic.js"></script>
+<script src="games/checkers/view.js"></script>
+<script src="games/checkers/index.js"></script>
+<script src="games/uno/logic.js"></script>
+<script src="games/uno/view.js"></script>
+<script src="games/uno/index.js"></script>
+<script src="games/poker/logic.js"></script>
+<script src="games/poker/view.js"></script>
+<script src="games/poker/index.js"></script>
+<script src="games/catan/logic.js"></script>
+<script src="games/catan/view.js"></script>
+<script src="games/catan/index.js"></script>
 <script src="fx/audio.js"></script>
 <script src="fx/fx.js"></script>
 <script src="main.js"></script>
