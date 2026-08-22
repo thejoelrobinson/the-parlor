@@ -36,8 +36,8 @@
   var DEV_IDX = { knight: 0, road: 1, plenty: 2, monopoly: 3, vp: 4 };
 
   var WIN_VP = 10;
-  var MAX_SETTLE = 20;
-  var MAX_ROAD = 25;
+  var MAX_SETTLE = 5;
+  var MAX_ROAD = 15;
   var LONGEST_MIN = 5;
   var ARMY_MIN = 3;
   var RES_CAP = 8;
@@ -314,8 +314,9 @@
     return 0;
   }
   function armyBonus(s, p) {
-    // knights played are tracked in s.army (dev[0] is knights HELD, and the
-    // view nulls the opponent's dev, so we must not read dev here).
+    // s.army[p] is the CUMULATIVE count of knights player p has played (official rule: 2 VPs
+    // to whoever has played the most knights — it never resets; only play-knight increments it).
+    // dev[0] is knights HELD, and the view nulls the opponent's dev, so we must not read dev here.
     var mine = s.army[p], other = s.army[1 - p];
     if (mine >= ARMY_MIN && mine > other) return 2;
     return 0;
@@ -433,7 +434,6 @@
     }
     made = produce(s, sum);
     s.last = { a: a, b: b, made: made };
-    if (s.devUsed !== s.turn) s.army[s.turn] = 0; // no knight this turn: the streak resets
     s.turn = 1 - s.turn;
     s.devUsed = null;
   }
@@ -468,7 +468,8 @@
     for (var e = 0; e < NE; e++) {
       if (canBuildRoad(s, side, e, rc) && canAfford(r, ROAD) && roadCount(s, side) < MAX_ROAD) m.push({ type: 'road', e: e });
     }
-    // settlements
+    // settlements: any empty vertex not adjacent to a settlement (yours or the
+    // opponent's) is legal — the network-connectivity rule is NOT part of Catan.
     if (owned(s, side) < MAX_SETTLE && canAfford(r, SETTLE)) {
       for (var v = 0; v < NV; v++) if (vertexFree(s, v)) m.push({ type: 'settle', v: v });
     }
@@ -595,7 +596,6 @@
           s.lastSteal = { p: victim, r: pick };
         }
         s.pending = null;
-        if (s.devUsed !== p) s.army[p] = 0; // a 7-roller's streak ends (a knight turn keeps it)
         s.devUsed = null;
         s.turn = 1 - s.turn; // a 7 or a knight consumes the turn
         break;
@@ -631,14 +631,15 @@
       case 'play-monopoly': {
         s.dev[p][3]--;
         var r = mv.r;
-        s.res[p][r] += s.bank[r]; // take ALL of one resource from the bank
-        s.bank[r] = 0;
+        var opp = 1 - p;
+        var stolen = s.res[opp][r]; // official text: every other player hands over ALL of that type
+        s.res[p][r] += stolen;
+        s.res[opp][r] = 0;
         s.devUsed = p;
         break;
       }
       case 'trade-offer': {
         for (var ti = 0; ti < 5; ti++) s.res[p][ti] -= mv.give[ti];
-        s.army[p] = 0; // a knight turn always ends with the robber move, so none was played
         s.pendingTrade = { from: p, give: mv.give.slice(), want: mv.want.slice() };
         s.turn = 1 - s.turn; // the recipient answers on their own turn
         break;
@@ -784,10 +785,12 @@
     var prodKinds = 0; for (var pk2 in prod) prodKinds++;
     var myVP = vp(s, side);
 
-    // settle: build out the production base first; favor hexes that supply what is missing
+    // settle: build out the production base first; favor hexes that supply what is missing.
+    // (any vertexFree vertex is legal — no network-connectivity rule in Catan)
     if (own < MAX_SETTLE && canAfford(r, SETTLE)) {
       var lacks = settleLacks(r);
-      for (var v = 0; v < NV; v++) if (vertexFree(s, v)) {
+      for (var v = 0; v < NV; v++) {
+        if (!vertexFree(s, v)) continue;
         var sc = 50 + hexPipsAt(s, v) * 10;
         var rs = hexResSet(v);
         for (var li = 0; li < lacks.length; li++) if (rs[lacks[li]]) sc += 15; // diversify
@@ -850,8 +853,11 @@
         for (var rp = 0; rp < 5; rp++) if (s.bank[rp] >= 2) consider({ type: 'play-plenty', r: rp }, 12 + (r[rp] < 2 ? 20 : 0));
       }
       if (s.dev[side][3] >= 1) {
-        // Monopoly takes ALL of one resource from the bank: worth it when the bank is fat
-        for (var mm = 0; mm < 5; mm++) consider({ type: 'play-monopoly', r: mm }, s.bank[mm] >= 3 ? 40 : 8);
+        // Monopoly steals ALL of one resource from the opponent: play it when they hold a fat pile
+        for (var mm = 0; mm < 5; mm++) {
+          var mheld = s.res[1 - side][mm];
+          if (mheld >= 1) consider({ type: 'play-monopoly', r: mm }, mheld >= 3 ? 40 : 15 + mheld * 5);
+        }
       }
     }
     // 4:1 trade — relief from holding 8+, and (when no settle is affordable) a
