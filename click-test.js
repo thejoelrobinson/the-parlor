@@ -368,6 +368,11 @@ function playGame(spec, side, seedBase) {
   const cap = { last: null };
   g.render = (view, el, opts) => { cap.last = { view, opts }; return origRender(view, el, opts); };
 
+  // count plain road moves (setup roads ride along with the site move and never emit one)
+  let roadMoves = 0;
+  const origApply = g.applyMove;
+  g.applyMove = (st, m) => { if (m && (m.type === 'road' || m.type === 'play-road')) roadMoves++; return origApply(st, m); };
+
   // menu → setup → Play vs Computer, all via real DOM clicks
   const card = document.querySelectorAll('.gcard').find((x) => x.dataset.game === spec.game);
   if (!card) throw new Error('no .gcard for ' + spec.game);
@@ -429,7 +434,7 @@ function playGame(spec, side, seedBase) {
   if (showing('overlay')) throw new Error('overlay still visible after leave');
   if (!showing('screen-menu')) throw new Error('did not return to menu after leave');
 
-  return { plies, hands, how, rematched };
+  return { plies, hands, how, rematched, roadMoves };
 }
 
 /* ---------------- run matrix ---------------- */
@@ -755,6 +760,9 @@ function fxExpect(spec, r) {
       'poker: expected a result tone for each of the ' + hands + ' finished hand(s), got ' + resultTones());
     if (hands >= 3) a(sfxCount('chip') + sfxCount('allin') >= 3,
       'poker: expected a bet sound (chip/all-in) in each of the 3 hands');
+  } else if (spec.game === 'catan') {
+    has('build', 1); has('turn', 1);
+    if (r.roadMoves >= 1) has('road', 1); // plain road moves are rare within the ply cap; assert only when one occurred
   }
 }
 

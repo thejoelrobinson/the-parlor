@@ -396,6 +396,25 @@
     draw: function (t) {
       tone(t, 587.33, 0.3, 'triangle', 0.14);
       tone(t + 0.16, 523.25, 0.42, 'triangle', 0.12);
+    },
+    turn: function (t) {
+      tone(t, 880, 0.04, 'sine', 0.07);
+    },
+    build: function (t) {
+      noiseHit(t, 0.09, 0.55, 'lowpass', 500, 0.8);
+      tone(t, 140, 0.12, 'sine', 0.55, { slide: 95 });
+    },
+    road: function (t) {
+      noiseHit(t, 0.07, 0.45, 'lowpass', 420, 0.8);
+      tone(t, 110, 0.1, 'sine', 0.45, { slide: 70 });
+    },
+    card: function (t) {
+      noiseHit(t, 0.04, 0.22, 'highpass', 1400, 0.8);
+      noiseHit(t + 0.035, 0.04, 0.18, 'lowpass', 600, 0.8);
+    },
+    robber: function (t) {
+      tone(t, 220, 0.25, 'sine', 0.5, { slide: 150 });
+      noiseHit(t, 0.08, 0.4, 'bandpass', 300, 1.2);
     }
   };
 
@@ -406,7 +425,7 @@
     try {
       var t = ctx.currentTime + 0.01;
       fn(t);
-      if (name !== 'tick') duck();
+      if (name !== 'tick' && name !== 'turn') duck();
     } catch (e) { /* never break gameplay on audio */ }
   }
 

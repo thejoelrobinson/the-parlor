@@ -720,6 +720,8 @@
     owned: owned,
     cityCount: cityCount,
     roadCount: roadCount,
+    longestBonus: longestBonus,
+    armyBonus: armyBonus,
     canAfford: canAfford,
     vp: vp,
     RNAMES: RNAMES,

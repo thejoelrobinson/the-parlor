@@ -1,14 +1,18 @@
-/* games/catan/view.js \u2014 Catan render layer (DOM only).
+/* games/catan/view.js — Catan render layer (DOM only).
  * Loaded after games/catan/logic.js. Logic symbols arrive on
  * global.PARLOR['catan'].logic as L. No top-level DOM access.
  *
  * The full 19-hex board is drawn with absolutely-positioned divs:
- *  - 19 hex tiles (clip-path pointy-top) with terrain + number token
+ *  - 19 hex tiles (clip-path pointy-top) with terrain + number token;
+ *    hexes that produced on the last roll gain a one-shot .produced glow
  *  - one road bar per owned edge, rotated to its edge angle
- *  - one <button class="cat-site"> at every vertex (54) \u2014 empty /
+ *  - one transparent edge button per edge — the road / road-card
+ *    affordance (pulses .can when a road can be built there)
+ *  - one <button class="cat-site"> at every vertex (54) — empty /
  *    settlement / city, plus the buildable affordances (.can / .city-can)
- *  - a robber marker, a dice readout, and an action bar (20 four-for-one
- *    trades + end turn)
+ *  - a robber marker and a dice readout
+ * Below the board: a turn banner, a build-cost legend, and an action bar
+ * (dev-card buy + dev-card plays + 20 four-for-one trades + end turn).
  * Clickable affordances are taken straight from L.legalMoves so the DOM can
  * never offer a move the logic would reject.
  */
@@ -28,24 +32,58 @@
   // safe inline-style setter: the click-test DOM stub has no .style object,
   // the browser does. Creating one when absent is harmless for the stub.
   function sty(el, k, v) { if (!el.style) el.style = {}; el.style[k] = v; }
+  // CSS custom property setter (edge rotation lives in --ea so a CSS hover
+  // transform can scale it; the DOM stub stores it as a plain key).
+  function setVar(el, k, v) { if (!el.style) el.style = {}; if (el.style.setProperty) el.style.setProperty(k, v); else el.style[k] = v; }
+  function cost(c) {
+    var out = [];
+    for (var i = 0; i < 5; i++) if (c[i]) out.push(c[i] + L.RICON[i]);
+    return out.join(' ');
+  }
 
   function render(view, el, opts) {
     var s = view;
     var interactive = !!(opts && opts.interactive);
     var me = (opts && opts.mySide != null) ? String(opts.mySide) : '0';
+    var mine = interactive && s.over === null;
     el.innerHTML = '';
 
-    /* which of the human's legal moves are buildable, by vertex */
-    var siteMove = {}, tradeMove = {}, canEnd = false;
-    if (interactive && s.over === null) {
+    /* which of the human's legal moves are available, by type */
+    var siteMove = {}, tradeMove = {}, roadByEdge = {};
+    var canEnd = false, canDev = false, canKnight = false;
+    var canPlenty = [false, false, false, false, false];
+    var canMonopoly = [false, false];
+    if (mine) {
       var moves = L.legalMoves(s, me);
       for (var i = 0; i < moves.length; i++) {
         var mv = moves[i];
         if (mv.type === 'setup' || mv.type === 'settle' || mv.type === 'city') siteMove[mv.type + ':' + mv.v] = mv;
         else if (mv.type === 'trade') tradeMove[mv.give + ':' + mv.get] = mv;
         else if (mv.type === 'end') canEnd = true;
+        else if (mv.type === 'dev') canDev = true;
+        else if (mv.type === 'play-knight') canKnight = true;
+        else if (mv.type === 'play-plenty') canPlenty[mv.r] = true;
+        else if (mv.type === 'play-monopoly') canMonopoly[mv.r] = true;
+        else if (mv.type === 'road') roadByEdge[mv.e] = mv;
+        else if (mv.type === 'play-road' && !roadByEdge[mv.e]) roadByEdge[mv.e] = mv;
       }
     }
+
+    /* turn / phase banner */
+    var banner = document.createElement('div');
+    banner.className = 'cat-turn';
+    if (s.phase === 'setup') {
+      var mineSites = 0;
+      for (var sv = 0; sv < NV; sv++) if (s.sites[sv] && String(s.sites[sv].p) === me) mineSites++;
+      banner.textContent = 'Setup — place your ' + (mineSites === 0 ? 'first' : 'second') + ' settlement (a road attaches automatically)';
+    } else if (s.over !== null) {
+      banner.textContent = 'Game over — ' + L.sideName(String(s.over)) + ' wins';
+    } else if (String(s.turn) === me) {
+      banner.textContent = 'Your turn — build, trade, then End turn';
+    } else {
+      banner.textContent = L.sideName(String(1 - s.turn)) + ' is thinking…';
+    }
+    el.appendChild(banner);
 
     var board = document.createElement('div');
     board.className = 'cat-board';
@@ -55,12 +93,25 @@
     island.setAttribute('aria-hidden', 'true');
     board.appendChild(island);
 
+    /* hexes that produced on the last roll (glow on the turn-change render) */
+    var produced = {};
+    if (s.last && el.__prev && el.__prev.turn !== s.turn) {
+      var sum = s.last.a + s.last.b;
+      if (sum !== 7) {
+        for (var pv = 0; pv < NV; pv++) {
+          if (!s.sites[pv]) continue;
+          var ph = L.VERTEX_HEXES[pv];
+          for (var pj = 0; pj < ph.length; pj++) if (s.numbers[ph[pj]] === sum) produced[ph[pj]] = true;
+        }
+      }
+    }
+
     /* hexes */
     var h;
     for (h = 0; h < NH; h++) {
       var ter = s.terrain[h];
       var hex = document.createElement('div');
-      hex.className = 'cat-hex h' + h + ' t-' + L.TERRAIN[ter];
+      hex.className = 'cat-hex h' + h + ' t-' + L.TERRAIN[ter] + (produced[h] ? ' produced' : '');
       var hp = at(L.HEX_POS[h][0], L.HEX_POS[h][1]);
       sty(hex, 'left', hp[0] + 'px');
       sty(hex, 'top', hp[1] + 'px');
@@ -91,6 +142,23 @@
       board.appendChild(road);
     }
 
+    /* edge buttons — one per edge; the road / road-card affordance */
+    for (var ee = 0; ee < NE; ee++) {
+      var eb = document.createElement('button');
+      eb.type = 'button';
+      var emid = at(L.EDGE_MID[ee][0], L.EDGE_MID[ee][1]);
+      sty(eb, 'left', emid[0] + 'px');
+      sty(eb, 'top', emid[1] + 'px');
+      setVar(eb, '--ea', L.EDGE_ANGLE[ee] + 'deg');
+      eb.className = 'cat-edge e' + ee;
+      if (mine && roadByEdge[ee]) {
+        eb.className += ' can';
+        eb.setAttribute('aria-label', roadByEdge[ee].type === 'road' ? 'Build a road here' : 'Play your road card here');
+        (function (m) { eb.addEventListener('click', function () { opts.onMove(m); }); })(roadByEdge[ee]);
+      }
+      board.appendChild(eb);
+    }
+
     /* sites (one button per vertex) */
     var siteEls = [];
     for (var v = 0; v < NV; v++) {
@@ -99,18 +167,14 @@
       var cls = 'cat-site s' + v;
       var click = null;
       if (o) cls += ' p' + o.p + (o.city ? ' city' : '');
-      if (interactive && s.over === null) {
-        var cand = siteMove['setup:' + v] || siteMove['settle:' + v] || siteMove['city:' + v];
-        if (cand) {
-          cls += (cand.type === 'city') ? ' city-can' : ' can';
-          click = cand;
-        }
+      if (mine) {
+        var cand = siteMove['setup:' + v] || siteMove['settle:' + v];
+        if (cand) { cls += ' can'; click = cand; }
+        var up = siteMove['city:' + v];
+        if (up) { cls += ' city-can'; if (!click) click = up; }
       }
       b.className = cls;
       b.type = 'button';
-      var lab = 'Site ' + (v + 1) + ': ' +
-        (o ? L.sideName(String(o.p)) + (o.city ? ' city' : ' settlement') : 'empty');
-      b.setAttribute('aria-label', lab);
       var vp = at(L.VERTEX[v][0], L.VERTEX[v][1]);
       sty(b, 'left', vp[0] + 'px');
       sty(b, 'top', vp[1] + 'px');
@@ -147,35 +211,80 @@
     board.appendChild(dice);
     el.appendChild(board);
 
-    /* action bar */
-    var bar = document.createElement('div');
-    bar.className = 'cat-bar';
-    for (var g = 0; g < 5; g++) {
-      for (var t = 0; t < 5; t++) {
-        if (t === g) continue;
-        (function (g, t) {
-          var tb = document.createElement('button');
-          var can = interactive && s.over === null && !!tradeMove[g + ':' + t];
-          tb.className = 'cat-trade' + (can ? ' can' : '');
-          tb.textContent = '4' + L.RSHORT[g] + '\u2192' + '1' + L.RSHORT[t];
-          tb.setAttribute('aria-label', 'Trade 4 ' + L.RNAMES[g] + ' for 1 ' + L.RNAMES[t]);
-          tb.type = 'button';
-          if (can) {
-            var m2 = tradeMove[g + ':' + t];
-            tb.addEventListener('click', function () { opts.onMove(m2); });
-          }
-          bar.appendChild(tb);
-        })(g, t);
+    /* cost legend + action bar (hidden during setup and after game over) */
+    if (s.phase !== 'setup' && s.over === null) {
+      var legend = document.createElement('div');
+      legend.className = 'cat-costs';
+      legend.textContent = 'Settlement ' + cost(L.BUILD_COST.SETTLE) + '  ·  City ' + cost(L.BUILD_COST.CITY) + '  ·  Road ' + cost(L.BUILD_COST.ROAD) + '  ·  Dev card ' + cost(L.BUILD_COST.DEV);
+      el.appendChild(legend);
+
+      var bar = document.createElement('div');
+      bar.className = 'cat-bar';
+
+      var db = document.createElement('button');
+      db.className = 'cat-dev' + (mine && canDev ? ' can' : '');
+      db.textContent = 'Dev card ' + cost(L.BUILD_COST.DEV);
+      db.type = 'button';
+      if (mine && canDev) db.addEventListener('click', function () { opts.onMove({ type: 'dev' }); });
+      bar.appendChild(db);
+
+      if (mine) {
+        var kb = document.createElement('button');
+        kb.className = 'cat-knight' + (canKnight ? ' can' : '');
+        kb.textContent = 'Knight — move the robber';
+        kb.type = 'button';
+        if (canKnight) kb.addEventListener('click', function () { opts.onMove({ type: 'play-knight' }); });
+        bar.appendChild(kb);
+
+        for (var pr = 0; pr < 5; pr++) {
+          (function (r) {
+            var pb = document.createElement('button');
+            pb.className = 'cat-plenty' + (canPlenty[r] ? ' can' : '');
+            pb.textContent = 'Plenty +2 ' + L.RICON[r];
+            pb.type = 'button';
+            if (canPlenty[r]) pb.addEventListener('click', function () { opts.onMove({ type: 'play-plenty', r: r }); });
+            bar.appendChild(pb);
+          })(pr);
+        }
+        for (var mr = 0; mr < 2; mr++) {
+          (function (r) {
+            var mb = document.createElement('button');
+            mb.className = 'cat-monopoly' + (canMonopoly[r] ? ' can' : '');
+            mb.textContent = 'Road Block ' + L.RICON[r];
+            mb.type = 'button';
+            if (canMonopoly[r]) mb.addEventListener('click', function () { opts.onMove({ type: 'play-monopoly', r: r }); });
+            bar.appendChild(mb);
+          })(mr);
+        }
       }
+
+      for (var g = 0; g < 5; g++) {
+        for (var t = 0; t < 5; t++) {
+          if (t === g) continue;
+          (function (g, t) {
+            var tb = document.createElement('button');
+            var can = mine && !!tradeMove[g + ':' + t];
+            tb.className = 'cat-trade' + (can ? ' can' : '');
+            tb.textContent = '4' + L.RICON[g] + ' \u2192 1' + L.RICON[t];
+            tb.setAttribute('aria-label', 'Trade 4 ' + L.RNAMES[g] + ' for 1 ' + L.RNAMES[t]);
+            tb.type = 'button';
+            if (can) {
+              var m2 = tradeMove[g + ':' + t];
+              tb.addEventListener('click', function () { opts.onMove(m2); });
+            }
+            bar.appendChild(tb);
+          })(g, t);
+        }
+      }
+      var end = document.createElement('button');
+      end.className = 'cat-end' + (mine && canEnd ? ' can' : '');
+      end.textContent = 'End turn';
+      end.setAttribute('aria-label', 'End turn, roll the dice and collect production');
+      end.type = 'button';
+      if (mine && canEnd) end.addEventListener('click', function () { opts.onMove({ type: 'end' }); });
+      bar.appendChild(end);
+      el.appendChild(bar);
     }
-    var end = document.createElement('button');
-    end.className = 'cat-end' + (interactive && s.over === null && canEnd ? ' can' : '');
-    end.textContent = 'End turn';
-    end.setAttribute('aria-label', 'End turn, roll the dice and collect production');
-    end.type = 'button';
-    if (interactive && s.over === null && canEnd) end.addEventListener('click', function () { opts.onMove({ type: 'end' }); });
-    bar.appendChild(end);
-    el.appendChild(bar);
 
     /* FX: derive a one-shot event from the diff against the previous render. */
     var curSites = [];
@@ -183,19 +292,22 @@
     var curRoads = [];
     for (var c2 = 0; c2 < NE; c2++) curRoads.push(s.roads[c2] == null ? '' : String(s.roads[c2]));
     var resJson = JSON.stringify(s.res);
+    var devJson = JSON.stringify([s.dev, s.devDeck.length]);
     var fx = [];
     var prev = el.__prev;
     if (prev) {
       var siteChanged = false, roadChanged = false;
       for (var c3 = 0; c3 < NV; c3++) if (prev.sites[c3] !== curSites[c3]) siteChanged = true;
       for (var c4 = 0; c4 < NE; c4++) if (prev.roads[c4] !== curRoads[c4]) roadChanged = true;
-      if (siteChanged) fx.push({ t: 'move', el: siteEls[0] });
-      else if (roadChanged) fx.push({ t: 'move' });
-      else if (prev.turn !== s.turn) fx.push({ t: 'phase' });
+      if (siteChanged) fx.push({ t: 'build', el: siteEls[0] });
+      else if (roadChanged) fx.push({ t: 'road' });
+      else if (prev.robber !== s.robber) fx.push({ t: 'robber' });
+      else if (prev.devJson !== devJson) fx.push({ t: 'card' });
+      else if (prev.turn !== s.turn) fx.push({ t: 'turn' });
       else if (prev.resJson !== resJson) fx.push({ t: 'deal' });
     }
     UI.events(el, fx); // fresh array every render; consumed once by pumpEvents
-    el.__prev = s.over === null ? { sites: curSites, roads: curRoads, turn: s.turn, resJson: resJson } : null;
+    el.__prev = s.over === null ? { sites: curSites, roads: curRoads, turn: s.turn, robber: s.robber, devJson: devJson, resJson: resJson } : null;
   }
 
   function renderInfo(view, el, opts) {
@@ -206,24 +318,55 @@
       row.className = 'player-row' + (view.over === null && view.turn === p ? ' active' : '');
       var nm = document.createElement('span');
       nm.className = 'pr-name' + (String(p) === me ? ' me' : '');
-      nm.textContent = (String(p) === me ? 'You \u2014 ' : '') + L.sideName(String(p));
+      nm.textContent = (String(p) === me ? 'You — ' : '') + L.sideName(String(p));
       row.appendChild(nm);
       var r = view.res[p];
       var meta = document.createElement('span');
       meta.className = 'pr-meta';
-      var rs = [];
-      for (var i = 0; i < 5; i++) rs.push(L.RICON[i] + r[i]);
-      meta.textContent = rs.join(' ') + ' \u00B7 ' + L.vp(view, p) + ' VP \u00B7 ' + L.cityCount(view, p) + ' cities \u00B7 ' + L.roadCount(view, p) + ' roads';
+      for (var i = 0; i < 5; i++) {
+        var rspan = document.createElement('span');
+        rspan.className = 'pr-res' + (r[i] >= 8 ? ' cap' : '');
+        rspan.textContent = L.RICON[i] + r[i];
+        meta.appendChild(rspan);
+      }
+      var extra = [];
+      if (L.longestBonus(view, p)) extra.push('longest-road +2');
+      if (L.armyBonus(view, p)) extra.push('army +2');
+      var tail = document.createElement('span');
+      tail.textContent = ' · ' + L.cityCount(view, p) + ' cities · ' + L.roadCount(view, p) + ' roads' + (extra.length ? ' · ' + extra.join(' · ') : '');
+      meta.appendChild(tail);
       row.appendChild(meta);
+      /* VP bar */
+      var vpb = document.createElement('span');
+      vpb.className = 'pr-vpbar';
+      vpb.setAttribute('aria-label', L.vp(view, p) + ' of ' + L.WIN_VP + ' victory points');
+      var vpf = document.createElement('span');
+      vpf.className = 'pr-vpfill';
+      sty(vpf, 'width', Math.min(100, L.vp(view, p) * 100 / L.WIN_VP) + '%');
+      vpb.appendChild(vpf);
+      var vpl = document.createElement('span');
+      vpl.className = 'pr-vplabel';
+      vpl.textContent = L.vp(view, p) + '/' + L.WIN_VP;
+      row.appendChild(vpb);
+      row.appendChild(vpl);
+      /* dev hand — hidden cards stay hidden: only the holder sees their hand */
+      if (view.dev[p] !== null) {
+        var dv = document.createElement('span');
+        dv.className = 'pr-dev';
+        var parts = [];
+        for (var d = 0; d < 5; d++) if (view.dev[p][d] > 0) parts.push(view.dev[p][d] + ' ' + L.DEV_NAMES[d]);
+        dv.textContent = (parts.length ? parts.join(', ') : 'No dev cards') + ' · ' + view.devDeck.length + ' left';
+        row.appendChild(dv);
+      }
       el.appendChild(row);
     }
     if (view.last) {
       var last = document.createElement('div');
       last.className = 'cat-last';
-      var parts = [];
-      for (var i2 = 0; i2 < 5; i2++) if (view.last.made[i2]) parts.push('+' + view.last.made[i2] + ' ' + L.RNAMES[i2]);
+      var parts2 = [];
+      for (var i2 = 0; i2 < 5; i2++) if (view.last.made[i2]) parts2.push('+' + view.last.made[i2] + ' ' + L.RNAMES[i2]);
       last.textContent = 'Roll ' + view.last.a + '+' + view.last.b + '=' + (view.last.a + view.last.b) +
-        (parts.length ? ' \u2192 ' + parts.join(', ') : ' \u2192 nothing');
+        (parts2.length ? ' \u2192 ' + parts2.join(', ') : ' \u2192 nothing');
       el.appendChild(last);
     }
     if (view.over !== null) {
