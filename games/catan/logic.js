@@ -28,7 +28,7 @@
 
   var ROAD = [0, 1, 1, 0, 0];
   var SETTLE = [1, 1, 1, 0, 1];
-  var CITY = [2, 0, 0, 2, 0];
+  var CITY = [2, 0, 0, 1, 0];
   var DEV = [1, 0, 0, 1, 1];
   var BUILD_COST = { ROAD: ROAD, SETTLE: SETTLE, CITY: CITY, DEV: DEV };
 
@@ -195,8 +195,12 @@
   /* ---------------- state ---------------- */
   function newState() {
     var b = genBoard();
-    // 25 development cards: 14 knight, 2 road, 2 year of plenty, 2 monopoly, 5 victory point
-    var devDeck = shuffle(['knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'road', 'road', 'plenty', 'plenty', 'monopoly', 'monopoly', 'vp', 'vp', 'vp', 'vp', 'vp']);
+    // 33 development cards (standard): 14 knight, 5 road, 5 plenty, 4 monopoly, 5 vp
+    var devDeck = [];
+    var _dc = [['knight', 14], ['road', 5], ['plenty', 5], ['monopoly', 4], ['vp', 5]];
+    for (var _di = 0; _di < _dc.length; _di++)
+      for (var _dj = 0; _dj < _dc[_di][1]; _dj++) devDeck.push(_dc[_di][0]);
+    shuffle(devDeck);
     // one-die roll: higher roll goes first (a tie is re-rolled)
     var f0 = 1 + randInt(6), f1 = 1 + randInt(6);
     while (f0 === f1) f1 = 1 + randInt(6);
@@ -225,6 +229,7 @@
       tradeCooldown: null, // {p, seq} — offerer who was just declined
       pending: null,        // null | 'robber' — a 7 (or knight) awaiting robber placement
       devUsed: null,        // side that already played a dev card this turn (max 1/turn)
+      devBought: null,      // side that already bought a dev card this turn (max 1/turn)
       pendingTrade: null,   // null | { from, give:[5], want:[5] } — a standing player trade
       lastSteal: null       // null | { p, r } — resource stolen by the last robber move
     };
@@ -430,12 +435,14 @@
       s.last = { a: a, b: b, made: made };
       s.pending = 'robber';
       s.devUsed = null;
+      s.devBought = null;
       return; // the turn does not pass until the robber is placed
     }
     made = produce(s, sum);
     s.last = { a: a, b: b, made: made };
     s.turn = 1 - s.turn;
     s.devUsed = null;
+    s.devBought = null;
   }
 
   /* ---------------- legal moves ---------------- */
@@ -480,8 +487,8 @@
     }
     // trades (bank, 4:1 — only if the bank still holds the wanted resource)
     for (var g = 0; g < 5; g++) if (r[g] >= 4) for (var t = 0; t < 5; t++) if (t !== g && s.bank[t] >= 1) m.push({ type: 'trade', give: g, get: t });
-    // dev buy (unlimited per turn)
-    if (s.devDeck.length > 0 && canAfford(r, DEV)) m.push({ type: 'dev' });
+    // dev buy (max one per turn, officially)
+    if (s.devDeck.length > 0 && canAfford(r, DEV) && s.devBought !== side) m.push({ type: 'dev' });
     // play dev cards (at most one per turn, officially)
     if (s.devUsed === null) {
       if (s.dev[side][0] >= 1) m.push({ type: 'play-knight' });
@@ -490,6 +497,16 @@
       }
       if (s.dev[side][2] >= 1) { for (var rp = 0; rp < 5; rp++) if (s.bank[rp] >= 2) m.push({ type: 'play-plenty', r: rp }); }
       if (s.dev[side][3] >= 1) { for (var mr = 0; mr < 5; mr++) m.push({ type: 'play-monopoly', r: mr }); }
+    }
+    // player-to-player trade offers: enumerate the full (give, want) space so the
+    // host's legalMoves membership check accepts a real offer from the composer
+    // (give[i] in [0, res[i]], want[i] in [0,4], each total 1..4 — see tradeOfferLegal)
+    if (s.pending === null && !s.pendingTrade) {
+      var gOpts = tradeResourceOptions(r);
+      var wOpts = tradeResourceOptions([4, 4, 4, 4, 4]);
+      for (var go = 0; go < gOpts.length; go++)
+        for (var wo = 0; wo < wOpts.length; wo++)
+          m.push({ type: 'trade-offer', give: gOpts[go].slice(), want: wOpts[wo].slice() });
     }
     // respond to a standing player trade (the recipient answers)
     if (s.pendingTrade && s.pendingTrade.from !== side) {
@@ -512,6 +529,23 @@
       gsum += give[i]; wsum += want[i];
     }
     return gsum >= 1 && wsum >= 1 && gsum <= 4 && wsum <= 4;
+  }
+
+  // every resource vector with element[i] in [0, cap[i]] and total in [1, 4]:
+  // the space a trade offer's give or want side can occupy
+  function tradeResourceOptions(caps) {
+    var out = [], arr = [0, 0, 0, 0, 0];
+    (function rec(i, sum) {
+      if (i === 5) { if (sum >= 1 && sum <= 4) out.push(arr.slice()); return; }
+      var lim = caps[i] > 4 ? 4 : caps[i];
+      for (var v = 0; v <= lim; v++) {
+        if (sum + v > 4) break;
+        arr[i] = v;
+        rec(i + 1, sum + v);
+      }
+      arr[i] = 0;
+    })(0, 0);
+    return out;
   }
 
   function isLegal(s, side, mv) {
@@ -597,6 +631,7 @@
         }
         s.pending = null;
         s.devUsed = null;
+        s.devBought = null;
         s.turn = 1 - s.turn; // a 7 or a knight consumes the turn
         break;
       }
@@ -604,6 +639,7 @@
         pay(s.res[p], DEV);
         var card = s.devDeck.pop();
         s.dev[p][DEV_IDX[card]]++;
+        s.devBought = p;
         if (card === 'vp') checkWin(s, p);
         break;
       }
@@ -647,8 +683,9 @@
       case 'trade-accept': {
         var pt = s.pendingTrade;
         var of = pt.from, rf = 1 - of;
+        // recipient pays the 'want'; the already-deducted 'give' now moves offerer -> recipient
         for (var ai = 0; ai < 5; ai++) s.res[rf][ai] -= pt.want[ai];
-        for (var oi = 0; oi < 5; oi++) s.res[of][oi] += pt.give[oi];
+        for (var oi = 0; oi < 5; oi++) s.res[rf][oi] += pt.give[oi];
         for (var wi = 0; wi < 5; wi++) s.res[of][wi] += pt.want[wi];
         s.pendingTrade = null;
         s.turn = 1 - s.turn;
