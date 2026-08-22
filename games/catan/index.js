@@ -95,14 +95,51 @@
     '.cat-dsum{font:800 11px/1 Inter,system-ui,sans-serif;color:#1c211e;min-width:14px;text-align:center}',
     '.cat-dice.roll .cat-die{animation:cat-toss .5s cubic-bezier(.18,1.3,.4,1)}',
     '@keyframes cat-toss{0%{transform:translateY(-7px) rotate(-14deg)}60%{transform:translateY(2px) rotate(7deg)}100%{transform:none}}',
-    '@media (prefers-reduced-motion:reduce){.cat-site.can,.cat-edge.can{animation:none}.cat-hex.produced{animation:none}.cat-dice.roll .cat-die{animation:none}}'
+    /* robber placement mode: clickable, pulsing red hexes */
+    '.cat-hex.robber-can{pointer-events:auto;cursor:pointer;animation:cat-robber 1.2s ease-in-out infinite}',
+    '@keyframes cat-robber{0%,100%{box-shadow:inset 0 0 0 2px rgba(179,38,30,.6)}50%{box-shadow:inset 0 0 0 5px rgba(179,38,30,.9),inset 0 0 16px rgba(179,38,30,.45)}}',
+    '.cat-hex.robber-can:hover{filter:brightness(1.08)}',
+    /* player-to-player trade: standing offer + response */
+    '.cat-pto{width:380px;margin:10px auto 0;padding:10px 12px;border:1px solid #d9b3a8;border-radius:12px;background:#fdf1ec;text-align:center}',
+    '.cat-pto-head{font:700 13px/1.5 Inter,system-ui,sans-serif;color:#8a4a3a;margin-bottom:9px}',
+    '.cat-pto-btns{display:flex;gap:8px;justify-content:center}',
+    '.cat-pto-accept,.cat-pto-decline{font:700 13px/1 Inter,system-ui,sans-serif;padding:8px 18px;border-radius:999px;cursor:default;transition:transform .12s,box-shadow .12s}',
+    '.cat-pto-accept{background:#f5f3ed;border:1px solid #d3cdbd;color:#9aa09a}',
+    '.cat-pto-accept.can{background:linear-gradient(160deg,#2f7d57,#154a33);border-color:#0e3a25;color:#fff;cursor:pointer}',
+    '.cat-pto-accept.can:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(28,33,30,.2)}',
+    '.cat-pto-decline{background:#f5f3ed;border:1px solid #d3cdbd;color:#9aa09a}',
+    '.cat-pto-decline.can{background:linear-gradient(160deg,#b3261e,#8a1c17);border-color:#6e1511;color:#fff;cursor:pointer}',
+    '.cat-pto-decline.can:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(28,33,30,.2)}',
+    /* trade composer toggle + give/want pickers */
+    '.cat-pto-open{background:#fbfaf7;border:1px dashed #c29330;color:#7d611d;font:600 12px/1 Inter,system-ui,sans-serif;padding:7px 11px;border-radius:9px;cursor:pointer;transition:transform .12s,background .12s}',
+    '.cat-pto-open:hover{transform:translateY(-1px)}',
+    '.cat-pto-open.open{background:#faf3e2}',
+    '.cat-tdlg{width:380px;margin:10px auto 0;padding:10px 12px;border:1px solid #e7d9b4;border-radius:12px;background:#faf3e2}',
+    '.cat-tdlg-title{font:700 12px/1.4 Inter,system-ui,sans-serif;color:#5c4a1d;text-align:center;margin-bottom:9px}',
+    '.cat-tdlg-row{display:flex;gap:5px;align-items:center;justify-content:center;margin-bottom:6px}',
+    '.cat-tdlg-lab{font:600 11px/1 Inter,system-ui,sans-serif;color:#79817a;width:66px;text-align:right}',
+    '.cat-tdlg-btn{background:#fff;border:1px solid #d3cdbd;color:#79817a;font:700 12px/1 Inter,system-ui,sans-serif;padding:6px 8px;border-radius:8px;cursor:pointer;min-width:36px;transition:border-color .12s,background .12s}',
+    '.cat-tdlg-btn.on{border-color:#c29330;background:#fff8e6;color:#7d611d}',
+    '.cat-tdlg-btn:hover{border-color:#c29330}',
+    '.cat-tdlg-btns{display:flex;gap:8px;justify-content:center;margin-top:5px}',
+    '.cat-tdlg-clear{background:#fff;border:1px solid #d3cdbd;color:#79817a;font:600 12px/1 Inter,system-ui,sans-serif;padding:7px 12px;border-radius:999px;cursor:pointer;transition:color .12s,border-color .12s}',
+    '.cat-tdlg-clear:hover{border-color:#b3261e;color:#b3261e}',
+    '.cat-pto-offer{background:#e4e0d4;border:1px solid #d3cdbd;color:#9aa09a;font:700 12px/1 Inter,system-ui,sans-serif;padding:7px 16px;border-radius:999px;cursor:default;transition:transform .12s,box-shadow .12s}',
+    '.cat-pto-offer.can{background:linear-gradient(160deg,#c29330,#a67c22);border-color:#8a6416;color:#fff;cursor:pointer}',
+    '.cat-pto-offer.can:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(28,33,30,.2)}',
+    /* resource bank (production draws from here) */
+    '.cat-bank{display:flex;gap:6px;align-items:center;justify-content:center;margin-top:9px;font:600 11px/1 Inter,system-ui,sans-serif;flex-wrap:wrap}',
+    '.cat-bank-lab{color:#79817a;font-weight:700;margin-right:2px}',
+    '.cat-bank-res{white-space:nowrap;color:#5c4a1d;background:#fbfaf7;border:1px solid #e7d9b4;border-radius:6px;padding:2px 5px}',
+    '.cat-bank-res.empty{color:#b3261e;background:#fdf1ec;border-color:#e7c3bd}',
+    '@media (prefers-reduced-motion:reduce){.cat-site.can,.cat-edge.can,.cat-hex.robber-can{animation:none}.cat-hex.produced{animation:none}.cat-dice.roll .cat-die{animation:none}}'
   ].join('\n');
 
   var game = {
     id: 'catan',
     title: 'Catan',
     blurb: 'Settle the island. Roll the dice, gather all five resources, build roads and cities \u2014 first to 10 points wins.',
-    hint: 'Pulsing sites are where you can build; pulsing edges place roads (your road card too). Buy dev cards and play them — the knight moves the robber. Trade four of a kind for any other resource. First to 10 VP wins.',
+    hint: 'Pulsing sites are where you can build; pulsing edges place roads. Buy dev cards and play them — the knight moves the robber (then click a hex to place it). Trade four of a kind to the bank, or open a player-to-player trade to barter with your rival. First to 10 VP wins.',
     sideList: ['0', '1'],
     pickSide: true,
     intensity(view) {

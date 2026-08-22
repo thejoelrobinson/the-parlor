@@ -47,12 +47,15 @@
     var me = (opts && opts.mySide != null) ? String(opts.mySide) : '0';
     var mine = interactive && s.over === null;
     el.innerHTML = '';
+    // self re-render hook for the trade composer (draft-only state changes do
+    // not pass through the session, so the composer re-invokes this render)
+    el.__selfRender = render; el.__selfView = view; el.__selfOpts = opts;
 
     /* which of the human's legal moves are available, by type */
     var siteMove = {}, tradeMove = {}, roadByEdge = {};
-    var canEnd = false, canDev = false, canKnight = false;
+    var canEnd = false, canDev = false, canKnight = false, canAccept = false, canDecline = false;
     var canPlenty = [false, false, false, false, false];
-    var canMonopoly = [false, false];
+    var canMonopoly = [false, false, false, false, false];
     if (mine) {
       var moves = L.legalMoves(s, me);
       for (var i = 0; i < moves.length; i++) {
@@ -64,8 +67,10 @@
         else if (mv.type === 'play-knight') canKnight = true;
         else if (mv.type === 'play-plenty') canPlenty[mv.r] = true;
         else if (mv.type === 'play-monopoly') canMonopoly[mv.r] = true;
-        else if (mv.type === 'road') roadByEdge[mv.e] = mv;
+        else if (mv.type === 'road' || mv.type === 'setup-road') roadByEdge[mv.e] = mv;
         else if (mv.type === 'play-road' && !roadByEdge[mv.e]) roadByEdge[mv.e] = mv;
+        else if (mv.type === 'trade-accept') canAccept = true;
+        else if (mv.type === 'trade-decline') canDecline = true;
       }
     }
 
@@ -73,9 +78,12 @@
     var banner = document.createElement('div');
     banner.className = 'cat-turn';
     if (s.phase === 'setup') {
-      var mineSites = 0;
-      for (var sv = 0; sv < NV; sv++) if (s.sites[sv] && String(s.sites[sv].p) === me) mineSites++;
-      banner.textContent = 'Setup — place your ' + (mineSites === 0 ? 'first' : 'second') + ' settlement (a road attaches automatically)';
+      var step = s.setupPlaced % 4;
+      banner.textContent = 'Setup ' + (s.setupPlaced + 1) + ' of 8 — ' + (step < 2 ? 'place a settlement' : 'place a road') + ' on the board';
+    } else if (s.pending === 'robber') {
+      banner.textContent = 'Move the robber — click a hex' + (String(s.turn) === me ? ' (you)' : '');
+    } else if (s.pendingTrade && s.pendingTrade.from !== parseInt(me, 10)) {
+      banner.textContent = 'You have a trade offer to answer';
     } else if (s.over !== null) {
       banner.textContent = 'Game over — ' + L.sideName(String(s.over)) + ' wins';
     } else if (String(s.turn) === me) {
@@ -107,11 +115,13 @@
     }
 
     /* hexes */
+    var robberPending = mine && s.pending === 'robber';
     var h;
     for (h = 0; h < NH; h++) {
       var ter = s.terrain[h];
       var hex = document.createElement('div');
-      hex.className = 'cat-hex h' + h + ' t-' + L.TERRAIN[ter] + (produced[h] ? ' produced' : '');
+      var robCan = robberPending && h !== s.robber;
+      hex.className = 'cat-hex h' + h + ' t-' + L.TERRAIN[ter] + (produced[h] ? ' produced' : '') + (robCan ? ' robber-can' : '');
       var hp = at(L.HEX_POS[h][0], L.HEX_POS[h][1]);
       sty(hex, 'left', hp[0] + 'px');
       sty(hex, 'top', hp[1] + 'px');
@@ -126,6 +136,11 @@
         tok.className = 'cat-num';
         tok.textContent = String(s.numbers[h]);
         hex.appendChild(tok);
+      }
+      if (robCan) {
+        hex.setAttribute('role', 'button');
+        hex.setAttribute('aria-label', 'Move the robber here');
+        (function (hh) { hex.addEventListener('click', function () { opts.onMove({ type: 'robber', h: hh }); }); })(h);
       }
       board.appendChild(hex);
     }
@@ -211,6 +226,34 @@
     board.appendChild(dice);
     el.appendChild(board);
 
+    /* player-to-player trade: answer a standing offer from the opponent */
+    var meInt = parseInt(me, 10);
+    if (s.pendingTrade && s.pendingTrade.from !== meInt) {
+      var pt = s.pendingTrade;
+      var ppanel = document.createElement('div');
+      ppanel.className = 'cat-pto';
+      var phead = document.createElement('div');
+      phead.className = 'cat-pto-head';
+      phead.textContent = L.sideName(String(pt.from)) + ' offers you: ' + cost(pt.give) + '  \u2192  ' + cost(pt.want);
+      ppanel.appendChild(phead);
+      var pbtns = document.createElement('div');
+      pbtns.className = 'cat-pto-btns';
+      var pa = document.createElement('button');
+      pa.className = 'cat-pto-accept' + (canAccept ? ' can' : '');
+      pa.textContent = 'Accept';
+      pa.type = 'button';
+      if (canAccept) pa.addEventListener('click', function () { opts.onMove({ type: 'trade-accept' }); });
+      var pd = document.createElement('button');
+      pd.className = 'cat-pto-decline' + (canDecline ? ' can' : '');
+      pd.textContent = 'Decline';
+      pd.type = 'button';
+      if (canDecline) pd.addEventListener('click', function () { opts.onMove({ type: 'trade-decline' }); });
+      pbtns.appendChild(pa);
+      pbtns.appendChild(pd);
+      ppanel.appendChild(pbtns);
+      el.appendChild(ppanel);
+    }
+
     /* cost legend + action bar (hidden during setup and after game over) */
     if (s.phase !== 'setup' && s.over === null) {
       var legend = document.createElement('div');
@@ -246,7 +289,7 @@
             bar.appendChild(pb);
           })(pr);
         }
-        for (var mr = 0; mr < 2; mr++) {
+        for (var mr = 0; mr < 5; mr++) {
           (function (r) {
             var mb = document.createElement('button');
             mb.className = 'cat-monopoly' + (canMonopoly[r] ? ' can' : '');
@@ -276,6 +319,17 @@
           })(g, t);
         }
       }
+      /* player-to-player trade composer toggle */
+      var to = document.createElement('button');
+      to.className = 'cat-pto-open' + (el.__tradeOpen ? ' open' : '');
+      to.textContent = el.__tradeOpen ? 'Close trade' : 'Trade with ' + L.sideName(String(1 - meInt));
+      to.type = 'button';
+      to.setAttribute('aria-label', 'Open the player-to-player trade composer');
+      if (mine && canEnd && !s.pending && !s.pendingTrade) {
+        to.addEventListener('click', function () { el.__tradeOpen = !el.__tradeOpen; if (el.__selfRender) el.__selfRender(el.__selfView, el, el.__selfOpts); });
+      }
+      bar.appendChild(to);
+
       var end = document.createElement('button');
       end.className = 'cat-end' + (mine && canEnd ? ' can' : '');
       end.textContent = 'End turn';
@@ -284,6 +338,73 @@
       if (mine && canEnd) end.addEventListener('click', function () { opts.onMove({ type: 'end' }); });
       bar.appendChild(end);
       el.appendChild(bar);
+
+      /* trade composer: the give/want pickers, shown when toggled open */
+      if (el.__tradeOpen && mine && !s.pending && !s.pendingTrade) {
+        if (!el.__tradeDraft || !el.__tradeDraft.give) el.__tradeDraft = { give: [0,0,0,0,0], want: [0,0,0,0,0] };
+        var tdlg = document.createElement('div');
+        tdlg.className = 'cat-tdlg';
+        var ttitle = document.createElement('div');
+        ttitle.className = 'cat-tdlg-title';
+        ttitle.textContent = 'Offer ' + L.sideName(String(1 - meInt)) + ' — up to 4 resources each way';
+        tdlg.appendChild(ttitle);
+        var mkRow = function (which, label) {
+          var row = document.createElement('div');
+          row.className = 'cat-tdlg-row';
+          var lab = document.createElement('span');
+          lab.className = 'cat-tdlg-lab';
+          lab.textContent = label;
+          row.appendChild(lab);
+          for (var tr = 0; tr < 5; tr++) {
+            (function (r) {
+              var b = document.createElement('button');
+              b.type = 'button';
+              var cur = el.__tradeDraft[which][r];
+              b.className = 'cat-tdlg-btn ' + which + (cur > 0 ? ' on' : '');
+              b.textContent = L.RICON[r] + ' ' + cur;
+              b.setAttribute('aria-label', label + ' ' + L.RNAMES[r]);
+              b.addEventListener('click', function () {
+                var d = el.__tradeDraft;
+                var sum = 0; for (var i = 0; i < 5; i++) sum += d[which][i];
+                if (which === 'give' && d.give[r] >= s.res[meInt][r]) return;
+                if (sum >= 4) return;
+                d[which][r]++;
+                if (el.__selfRender) el.__selfRender(el.__selfView, el, el.__selfOpts);
+              });
+              row.appendChild(b);
+            })(tr);
+          }
+          tdlg.appendChild(row);
+        };
+        mkRow('give', 'You give');
+        mkRow('want', 'You want');
+        var tbtns = document.createElement('div');
+        tbtns.className = 'cat-tdlg-btns';
+        var tclear = document.createElement('button');
+        tclear.className = 'cat-tdlg-clear';
+        tclear.textContent = 'Clear';
+        tclear.type = 'button';
+        tclear.addEventListener('click', function () { el.__tradeDraft = { give: [0,0,0,0,0], want: [0,0,0,0,0] }; if (el.__selfRender) el.__selfRender(el.__selfView, el, el.__selfOpts); });
+        var toffer = document.createElement('button');
+        toffer.type = 'button';
+        toffer.textContent = 'Offer';
+        var gs = 0, ws = 0;
+        for (var gi = 0; gi < 5; gi++) { gs += el.__tradeDraft.give[gi]; ws += el.__tradeDraft.want[gi]; }
+        var offerOk = gs >= 1 && ws >= 1;
+        toffer.className = 'cat-pto-offer' + (offerOk ? ' can' : '');
+        if (offerOk) {
+          toffer.addEventListener('click', function () {
+            var d = el.__tradeDraft;
+            opts.onMove({ type: 'trade-offer', give: d.give.slice(), want: d.want.slice() });
+            el.__tradeDraft = { give: [0,0,0,0,0], want: [0,0,0,0,0] };
+            el.__tradeOpen = false;
+          });
+        }
+        tbtns.appendChild(tclear);
+        tbtns.appendChild(toffer);
+        tdlg.appendChild(tbtns);
+        el.appendChild(tdlg);
+      }
     }
 
     /* FX: derive a one-shot event from the diff against the previous render. */
@@ -301,10 +422,13 @@
       for (var c4 = 0; c4 < NE; c4++) if (prev.roads[c4] !== curRoads[c4]) roadChanged = true;
       if (siteChanged) fx.push({ t: 'build', el: siteEls[0] });
       else if (roadChanged) fx.push({ t: 'road' });
-      else if (prev.robber !== s.robber) fx.push({ t: 'robber' });
+      else if (prev.robber !== s.robber) {
+        fx.push({ t: 'robber' });
+        if (prev.resJson !== resJson) fx.push({ t: 'steal' });
+      }
       else if (prev.devJson !== devJson) fx.push({ t: 'card' });
       else if (prev.turn !== s.turn) fx.push({ t: 'turn' });
-      else if (prev.resJson !== resJson) fx.push({ t: 'deal' });
+      else if (prev.resJson !== resJson) fx.push({ t: 'trade' });
     }
     UI.events(el, fx); // fresh array every render; consumed once by pumpEvents
     el.__prev = s.over === null ? { sites: curSites, roads: curRoads, turn: s.turn, robber: s.robber, devJson: devJson, resJson: resJson } : null;
@@ -360,6 +484,22 @@
       }
       el.appendChild(row);
     }
+    /* bank — how many of each resource remain (production draws from here, so 0 = that tile goes silent) */
+    var bank = document.createElement('div');
+    bank.className = 'cat-bank';
+    var bankTotal = 0;
+    for (var bi = 0; bi < 5; bi++) bankTotal += view.bank[bi];
+    var bankLab = document.createElement('span');
+    bankLab.className = 'cat-bank-lab';
+    bankLab.textContent = 'Bank (' + bankTotal + ')';
+    bank.appendChild(bankLab);
+    for (var bj = 0; bj < 5; bj++) {
+      var bspan = document.createElement('span');
+      bspan.className = 'cat-bank-res' + (view.bank[bj] === 0 ? ' empty' : '');
+      bspan.textContent = L.RICON[bj] + view.bank[bj];
+      bank.appendChild(bspan);
+    }
+    el.appendChild(bank);
     if (view.last) {
       var last = document.createElement('div');
       last.className = 'cat-last';

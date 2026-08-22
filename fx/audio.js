@@ -415,6 +415,15 @@
     robber: function (t) {
       tone(t, 220, 0.25, 'sine', 0.5, { slide: 150 });
       noiseHit(t, 0.08, 0.4, 'bandpass', 300, 1.2);
+    },
+    trade: function (t) {
+      tone(t, 523.25, 0.07, 'triangle', 0.13);
+      tone(t + 0.08, 659.25, 0.12, 'triangle', 0.13);
+      noiseHit(t, 0.04, 0.18, 'highpass', 1600, 0.8);
+    },
+    steal: function (t) {
+      tone(t, 330, 0.13, 'sawtooth', 0.18, { slide: 165 });
+      noiseHit(t + 0.05, 0.12, 0.34, 'bandpass', 520, 1.4);
     }
   };
 

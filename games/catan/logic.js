@@ -28,11 +28,11 @@
 
   var ROAD = [0, 1, 1, 0, 0];
   var SETTLE = [1, 1, 1, 0, 1];
-  var CITY = [3, 0, 0, 2, 0];
+  var CITY = [2, 0, 0, 2, 0];
   var DEV = [1, 0, 0, 1, 1];
   var BUILD_COST = { ROAD: ROAD, SETTLE: SETTLE, CITY: CITY, DEV: DEV };
 
-  var DEV_NAMES = ['Knight', 'Longest Road', 'Year of Plenty', 'Road Block', 'Victory Point'];
+  var DEV_NAMES = ['Knight', 'Road', 'Year of Plenty', 'Monopoly', 'Victory Point'];
   var DEV_IDX = { knight: 0, road: 1, plenty: 2, monopoly: 3, vp: 4 };
 
   var WIN_VP = 10;
@@ -41,12 +41,10 @@
   var LONGEST_MIN = 5;
   var ARMY_MIN = 3;
   var RES_CAP = 8;
-  var NUMS = [5, 5, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1]; // 6,6,5,5,4,4,3,3,3,2,2,2,10,10,9,9,12
-  // (reordered below for clarity)
   // 18 number tokens for the 18 non-desert hexes, weighted by 2d6 probability:
-  // 2(1/36)x2, 3(2/36)x3, 4(3/36)x2, 5(4/36)x2, 6(5/36)x2, 8(5/36)x2, 9(4/36)x2,
-  // 10(3/36)x2, 12(1/36)x1.
-  var TOKENS = [2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 12];
+  // 2(1/36)x1, 3(2/36)x2, 4(3/36)x2, 5(4/36)x2, 6(5/36)x2, 8(5/36)x2, 9(4/36)x2,
+  // 10(3/36)x2, 11(2/36)x2, 12(1/36)x1.
+  var TOKENS = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
 
   /* ---------------- geometry (deterministic, computed once) ---------------- */
   var SQ3 = Math.sqrt(3);
@@ -197,12 +195,17 @@
   /* ---------------- state ---------------- */
   function newState() {
     var b = genBoard();
-    var devDeck = shuffle(['knight', 'knight', 'knight', 'knight', 'road', 'road', 'road', 'road', 'road', 'plenty', 'plenty', 'plenty', 'plenty', 'plenty', 'monopoly', 'monopoly', 'monopoly', 'monopoly', 'monopoly', 'vp', 'vp', 'vp', 'vp']);
+    // 25 development cards: 14 knight, 2 road, 2 year of plenty, 2 monopoly, 5 victory point
+    var devDeck = shuffle(['knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'knight', 'road', 'road', 'plenty', 'plenty', 'monopoly', 'monopoly', 'vp', 'vp', 'vp', 'vp', 'vp']);
+    // one-die roll: higher roll goes first (a tie is re-rolled)
+    var f0 = 1 + randInt(6), f1 = 1 + randInt(6);
+    while (f0 === f1) f1 = 1 + randInt(6);
     var s = {
       phase: 'setup',
-      turn: 0,
+      turn: f0 > f1 ? 0 : 1,
       over: null,
       setupPlaced: 0,
+      secondSite: [null, null],
       terrain: b.terrain,
       numbers: b.numbers,
       desert: b.desert,
@@ -210,20 +213,21 @@
       sites: new Array(NV).fill(null),
       roads: new Array(NE).fill(null),
       res: [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
+      bank: [19, 19, 19, 19, 19], // 19 of each resource: 95 total, a closed system
       dev: [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
       devDeck: devDeck,
       last: null,
       seq: 0,
-      army: [0, 0]
+      army: [0, 0],
+      first: f0 > f1 ? 0 : 1,
+      firstRoll: [f0, f1],
+      lastMover: 0,
+      tradeCooldown: null, // {p, seq} — offerer who was just declined
+      pending: null,        // null | 'robber' — a 7 (or knight) awaiting robber placement
+      devUsed: null,        // side that already played a dev card this turn (max 1/turn)
+      pendingTrade: null,   // null | { from, give:[5], want:[5] } — a standing player trade
+      lastSteal: null       // null | { p, r } — resource stolen by the last robber move
     };
-    // setup: deal 4 resource cards each
-    var startCards = ['wheat', 'wheat', 'lumber', 'brick', 'ore', 'sheep', 'wheat', 'lumber'];
-    // standard starting: 2 wheat, 1 lumber, 1 brick, 1 ore, 1 sheep? Use 4 cards: wheat, wheat, lumber, brick? 
-    // Simplify: deal 4 random-ish cards: wheat, lumber, brick, ore (one each) — deterministic-ish.
-    var give = [0, 1, 2, 3]; // wheat, lumber, brick, ore
-    for (var p = 0; p < 2; p++) {
-      for (var c = 0; c < 4; c++) s.res[p][give[c]]++;
-    }
     return s;
   }
 
@@ -254,6 +258,17 @@
     if (s.roads[e] != null) return false;
     if (!r) r = reached(s, p);
     return !!(r[EDGE[e][0]] || r[EDGE[e][1]]);
+  }
+  // during setup, a road must sit on an edge touching one of your own settlements
+  function setupRoads(s, p) {
+    var out = [];
+    for (var e = 0; e < NE; e++) {
+      if (s.roads[e] != null) continue;
+      var a = EDGE[e][0], b = EDGE[e][1];
+      var oa = s.sites[a], ob = s.sites[b];
+      if ((oa && oa.p === p) || (ob && ob.p === p)) out.push(e);
+    }
+    return out;
   }
 
   /* ---------------- longest road (DFS, capped) ---------------- */
@@ -348,18 +363,10 @@
     }
     return cand[randInt(cand.length)];
   }
-  function stealOne(s, p) {
-    var total = sumOf(s.res[p]);
-    if (total <= 0) return;
-    var pool = [];
-    for (var i = 0; i < 5; i++) for (var c = 0; c < s.res[p][i]; c++) pool.push(i);
-    var pick = pool[randInt(pool.length)];
-    s.res[p][pick]--;
-  }
-
-  /* ---------------- production ---------------- */
+  /* ---------------- production (from the bank — the 95-card supply) ---------------- */
   function produce(s, sum) {
-    var made = [0, 0, 0, 0, 0];
+    // tally demand per resource from the hexes that rolled
+    var need = [0, 0, 0, 0, 0];
     for (var h = 0; h < NH; h++) {
       if (s.numbers[h] !== sum || s.robber === h) continue;
       var t = TERRAIN_RES[s.terrain[h]];
@@ -368,10 +375,29 @@
       for (var k = 0; k < 6; k++) {
         var vi = vMap[vkey(cs[k][0], cs[k][1])];
         var o = s.sites[vi];
-        if (!o) continue;
-        var amt = o.city ? 2 : 1;
-        s.res[o.p][t] += amt;
-        made[t] += amt;
+        if (o) need[t] += o.city ? 2 : 1;
+      }
+    }
+    // the bank is the source of every card: only what it holds can be produced,
+    // and only into hands that have room (8 per resource). Unmet demand and
+    // capped-out hands leave the cards in the bank.
+    var made = [0, 0, 0, 0, 0];
+    for (var h2 = 0; h2 < NH; h2++) {
+      if (s.numbers[h2] !== sum || s.robber === h2) continue;
+      var tr = TERRAIN_RES[s.terrain[h2]];
+      if (tr < 0) continue;
+      var cs2 = HEX_CORNERS[h2];
+      for (var k2 = 0; k2 < 6; k2++) {
+        if (need[tr] <= 0) break; // all demand for this type is met
+        var vi2 = vMap[vkey(cs2[k2][0], cs2[k2][1])];
+        var o2 = s.sites[vi2];
+        if (!o2) continue;
+        var give = Math.min(o2.city ? 2 : 1, s.bank[tr], RES_CAP - s.res[o2.p][tr]);
+        if (give <= 0) continue;
+        s.res[o2.p][tr] += give;
+        s.bank[tr] -= give;
+        need[tr] -= give;
+        made[tr] += give;
       }
     }
     return made;
@@ -385,7 +411,9 @@
       var pool = [];
       for (var i = 0; i < 5; i++) for (var c = 0; c < s.res[p][i]; c++) pool.push(i);
       if (!pool.length) break;
-      s.res[p][pool[randInt(pool.length)]]--;
+      var di = pool[randInt(pool.length)];
+      s.res[p][di]--;
+      s.bank[di]++; // discards go back to the bank (closed 95-card system)
       toDiscard--;
     }
   }
@@ -394,16 +422,20 @@
     var a = 1 + randInt(6), b = 1 + randInt(6), sum = a + b;
     var made;
     if (sum === 7) {
+      // 7: every player holding more than 8 discards down to half, then the
+      // roller personally moves the robber (no auto placement, no auto steal)
       made = [0, 0, 0, 0, 0];
-      var me = s.turn;
-      s.robber = bestBlock(s, me);
-      stealOne(s, 1 - me);
-    } else {
-      made = produce(s, sum);
+      for (var p = 0; p < 2; p++) discardHalf(s, p);
+      s.last = { a: a, b: b, made: made };
+      s.pending = 'robber';
+      s.devUsed = null;
+      return; // the turn does not pass until the robber is placed
     }
+    made = produce(s, sum);
     s.last = { a: a, b: b, made: made };
-    discardHalf(s, s.turn);
+    if (s.devUsed !== s.turn) s.army[s.turn] = 0; // no knight this turn: the streak resets
     s.turn = 1 - s.turn;
+    s.devUsed = null;
   }
 
   /* ---------------- legal moves ---------------- */
@@ -413,7 +445,21 @@
     if (s.turn !== side) return [];
     var m = [];
     if (s.phase === 'setup') {
-      for (var v = 0; v < NV; v++) if (vertexFree(s, v)) m.push({ type: 'setup', v: v });
+      // placement order S,S,R,R,S,S,R,R — within each 4-placement cycle the
+      // first two are settlements and the last two are roads
+      var step = s.setupPlaced % 4;
+      if (step < 2) {
+        for (var v = 0; v < NV; v++) if (vertexFree(s, v)) m.push({ type: 'setup', v: v });
+      } else {
+        var eds = setupRoads(s, side);
+        for (var e = 0; e < eds.length; e++) m.push({ type: 'setup-road', e: eds[e] });
+      }
+      return m;
+    }
+    if (s.pending === 'robber') {
+      // the roller (or knight's player) must place the robber before anything
+      // else: any hex except the one the robber currently sits on
+      for (var h = 0; h < NH; h++) if (h !== s.robber) m.push({ type: 'robber', h: h });
       return m;
     }
     var r = s.res[side];
@@ -431,50 +477,83 @@
       var o = s.sites[v2];
       if (o && o.p === side && !o.city && canAfford(r, CITY)) m.push({ type: 'city', v: v2 });
     }
-    // trades
-    for (var g = 0; g < 5; g++) if (r[g] >= 4) for (var t = 0; t < 5; t++) if (t !== g) m.push({ type: 'trade', give: g, get: t });
-    // dev buy
+    // trades (bank, 4:1 — only if the bank still holds the wanted resource)
+    for (var g = 0; g < 5; g++) if (r[g] >= 4) for (var t = 0; t < 5; t++) if (t !== g && s.bank[t] >= 1) m.push({ type: 'trade', give: g, get: t });
+    // dev buy (unlimited per turn)
     if (s.devDeck.length > 0 && canAfford(r, DEV)) m.push({ type: 'dev' });
-    // play dev cards
-    if (s.dev[side][0] >= 1) m.push({ type: 'play-knight' });
-    if (s.dev[side][1] >= 1) {
-      for (var e2 = 0; e2 < NE; e2++) if (canBuildRoad(s, side, e2, rc)) m.push({ type: 'play-road', e: e2 });
+    // play dev cards (at most one per turn, officially)
+    if (s.devUsed === null) {
+      if (s.dev[side][0] >= 1) m.push({ type: 'play-knight' });
+      if (s.dev[side][1] >= 1) {
+        for (var e2 = 0; e2 < NE; e2++) if (canBuildRoad(s, side, e2, rc)) m.push({ type: 'play-road', e: e2 });
+      }
+      if (s.dev[side][2] >= 1) { for (var rp = 0; rp < 5; rp++) if (s.bank[rp] >= 2) m.push({ type: 'play-plenty', r: rp }); }
+      if (s.dev[side][3] >= 1) { for (var mr = 0; mr < 5; mr++) m.push({ type: 'play-monopoly', r: mr }); }
     }
-    if (s.dev[side][2] >= 1) { for (var rp = 0; rp < 5; rp++) m.push({ type: 'play-plenty', r: rp }); }
-    if (s.dev[side][3] >= 1) { m.push({ type: 'play-monopoly', r: 0 }); m.push({ type: 'play-monopoly', r: 1 }); }
+    // respond to a standing player trade (the recipient answers)
+    if (s.pendingTrade && s.pendingTrade.from !== side) {
+      if (canAfford(r, s.pendingTrade.want)) m.push({ type: 'trade-accept' });
+      m.push({ type: 'trade-decline' });
+    }
     // end
     m.push({ type: 'end' });
     return m;
   }
 
+  function tradeOfferLegal(s, side, mv) {
+    if (s.phase !== 'play' || s.over !== null || s.turn !== side) return false;
+    if (s.pending !== null || s.pendingTrade) return false;
+    var r = s.res[side];
+    var give = mv.give || [], want = mv.want || [];
+    var gsum = 0, wsum = 0;
+    for (var i = 0; i < 5; i++) {
+      if (give[i] < 0 || want[i] < 0 || r[i] < give[i]) return false;
+      gsum += give[i]; wsum += want[i];
+    }
+    return gsum >= 1 && wsum >= 1 && gsum <= 4 && wsum <= 4;
+  }
+
   function isLegal(s, side, mv) {
     side = parseInt(side, 10);
+    if (mv.type === 'trade-offer') return tradeOfferLegal(s, side, mv);
     var ls = legalMoves(s, side);
     var key = JSON.stringify(mv);
     for (var i = 0; i < ls.length; i++) if (JSON.stringify(ls[i]) === key) return true;
     return false;
   }
 
+  function finishSetup(s) {
+    // setup complete: each player draws 1 card per productive hex adjacent to
+    // their SECOND settlement (the bank is the source)
+    for (var pp = 0; pp < 2; pp++) {
+      var hs = VERTEX_HEXES[s.secondSite[pp]];
+      for (var hi = 0; hi < hs.length; hi++) {
+        var tr = TERRAIN_RES[s.terrain[hs[hi]]];
+        if (tr >= 0) { s.res[pp][tr]++; s.bank[tr]--; }
+      }
+    }
+    s.phase = 'play';
+    s.turn = s.first;
+  }
+
   /* ---------------- apply move ---------------- */
   function applyMove(s, mv) {
     s.seq = (s.seq || 0) + 1; // monotonic move counter: guarantees the projection advances after any applied move
     var p = s.turn;
+    s.lastMover = p; // describeMove runs after the mutation (and the turn may have switched)
     switch (mv.type) {
       case 'setup': {
         var v = mv.v;
         s.sites[v] = { p: p, city: false };
-        // auto-assign a free fronting road
-        var adj = VADJ[v];
-        var pick = -1;
-        for (var i = 0; i < adj.length; i++) {
-          var e = -1;
-          for (var ee = 0; ee < NE; ee++) if ((EDGE[ee][0] === v && EDGE[ee][1] === adj[i]) || (EDGE[ee][0] === adj[i] && EDGE[ee][1] === v)) { e = ee; break; }
-          if (e >= 0 && s.roads[e] == null) { pick = e; break; }
-        }
-        if (pick >= 0) s.roads[pick] = p;
+        if (owned(s, p) === 2) s.secondSite[p] = v;
         s.setupPlaced++;
-        if (s.setupPlaced >= 4) { s.phase = 'play'; s.turn = 0; }
-        else s.turn = 1 - s.turn;
+        if (s.setupPlaced >= 8) finishSetup(s); else s.turn = 1 - s.turn;
+        break;
+      }
+      case 'setup-road': {
+        s.roads[mv.e] = p;
+        s.setupPlaced++;
+        if (s.setupPlaced >= 8) finishSetup(s); else s.turn = 1 - s.turn;
         break;
       }
       case 'road': {
@@ -496,7 +575,29 @@
       }
       case 'trade': {
         s.res[p][mv.give] -= 4;
+        s.bank[mv.give] += 4; // the four given cards return to the supply (official rule)
         s.res[p][mv.get] += 1;
+        s.bank[mv.get]--; // the received card is drawn from the supply
+        break;
+      }
+      case 'robber': {
+        // the roller (or knight's player) places the robber and steals when the
+        // victim holds at least two cards
+        s.robber = mv.h;
+        s.lastSteal = null;
+        var victim = 1 - p;
+        if (sumOf(s.res[victim]) >= 2) {
+          var pool = [];
+          for (var i = 0; i < 5; i++) for (var c = 0; c < s.res[victim][i]; c++) pool.push(i);
+          var pick = pool[randInt(pool.length)];
+          s.res[victim][pick]--;
+          s.res[p][pick]++;
+          s.lastSteal = { p: victim, r: pick };
+        }
+        s.pending = null;
+        if (s.devUsed !== p) s.army[p] = 0; // a 7-roller's streak ends (a knight turn keeps it)
+        s.devUsed = null;
+        s.turn = 1 - s.turn; // a 7 or a knight consumes the turn
         break;
       }
       case 'dev': {
@@ -509,25 +610,55 @@
       case 'play-knight': {
         s.dev[p][0]--;
         s.army[p]++;
-        s.robber = bestBlock(s, p);
-        stealOne(s, 1 - p);
         checkWin(s, p);
+        s.devUsed = p;
+        s.pending = 'robber'; // the player must place the robber themselves
         break;
       }
       case 'play-road': {
         s.dev[p][1]--;
         s.roads[mv.e] = p;
+        s.devUsed = p;
         break;
       }
       case 'play-plenty': {
         s.dev[p][2]--;
         s.res[p][mv.r] += 2;
+        s.bank[mv.r] -= 2; // plenty draws from the 95-card supply
+        s.devUsed = p;
         break;
       }
       case 'play-monopoly': {
         s.dev[p][3]--;
         var r = mv.r;
-        for (var q = 0; q < 2; q++) { s.res[p][r] += s.res[q][r]; s.res[q][r] = 0; }
+        s.res[p][r] += s.bank[r]; // take ALL of one resource from the bank
+        s.bank[r] = 0;
+        s.devUsed = p;
+        break;
+      }
+      case 'trade-offer': {
+        for (var ti = 0; ti < 5; ti++) s.res[p][ti] -= mv.give[ti];
+        s.army[p] = 0; // a knight turn always ends with the robber move, so none was played
+        s.pendingTrade = { from: p, give: mv.give.slice(), want: mv.want.slice() };
+        s.turn = 1 - s.turn; // the recipient answers on their own turn
+        break;
+      }
+      case 'trade-accept': {
+        var pt = s.pendingTrade;
+        var of = pt.from, rf = 1 - of;
+        for (var ai = 0; ai < 5; ai++) s.res[rf][ai] -= pt.want[ai];
+        for (var oi = 0; oi < 5; oi++) s.res[of][oi] += pt.give[oi];
+        for (var wi = 0; wi < 5; wi++) s.res[of][wi] += pt.want[wi];
+        s.pendingTrade = null;
+        s.turn = 1 - s.turn;
+        break;
+      }
+      case 'trade-decline': {
+        var pd = s.pendingTrade;
+        for (var di = 0; di < 5; di++) s.res[pd.from][di] += pd.give[di];
+        s.tradeCooldown = { p: pd.from, seq: s.seq }; // no immediate re-offer of the same deal
+        s.pendingTrade = null;
+        s.turn = 1 - s.turn;
         break;
       }
       case 'end': {
@@ -557,23 +688,37 @@
 
   /* ---------------- describe ---------------- */
   function describeMove(s, mv) {
-    var p = s.turn;
+    var p = s.lastMover != null ? s.lastMover : s.turn;
     var name = sideName(p);
     switch (mv.type) {
-      case 'setup': return name + ' placed a settlement (setup).';
+      case 'setup': return name + (s.secondSite && s.secondSite[p] === mv.v ? ' placed their second settlement (setup).' : ' placed a settlement (setup).');
+      case 'setup-road': return name + ' built a setup road.';
       case 'road': return name + ' built a road.';
       case 'settle': return name + ' built a settlement.';
       case 'city': return name + ' upgraded to a city.';
-      case 'trade': return name + ' traded 4 ' + RNAMES[mv.give] + ' for 1 ' + RNAMES[mv.get] + '.';
+      case 'trade': return name + ' traded 4 ' + RNAMES[mv.give] + ' for 1 ' + RNAMES[mv.get] + ' (bank).';
       case 'dev': return name + ' bought a development card.';
-      case 'play-knight': return name + ' played a Knight.';
-      case 'play-road': return name + ' used a Longest Road card.';
+      case 'play-knight': return name + ' played a Knight (placing the robber).';
+      case 'play-road': return name + ' used a Road card.';
       case 'play-plenty': return name + ' used Year of Plenty (' + RNAMES[mv.r] + ').';
-      case 'play-monopoly': return name + ' used Road Block (' + RNAMES[mv.r] + ').';
+      case 'play-monopoly': return name + ' used Monopoly (' + RNAMES[mv.r] + ').';
+      case 'robber':
+        if (s.lastSteal) return name + ' moved the robber and stole a ' + RNAMES[s.lastSteal.r] + ' from ' + sideName(s.lastSteal.p) + '.';
+        return name + ' moved the robber.';
+      case 'trade-offer': {
+        var gl = [], wl = [];
+        for (var gi = 0; gi < 5; gi++) {
+          if (mv.give[gi]) gl.push(mv.give[gi] + ' ' + RNAMES[gi]);
+          if (mv.want[gi]) wl.push(mv.want[gi] + ' ' + RNAMES[gi]);
+        }
+        return name + ' offered ' + gl.join(', ') + ' for ' + wl.join(', ') + '.';
+      }
+      case 'trade-accept': return name + ' accepted the trade.';
+      case 'trade-decline': return name + ' declined the trade.';
       case 'end':
         if (s.last) {
           var sum = s.last.a + s.last.b;
-          if (sum === 7) return name + ' rolled 7 \u2014 the robber moves.';
+          if (sum === 7) return name + ' rolled 7 \u2014 discards, then the robber moves.';
           var parts = [];
           for (var i = 0; i < 5; i++) if (s.last.made[i]) parts.push('+' + s.last.made[i] + ' ' + RNAMES[i]);
           return name + ' rolled ' + s.last.a + '+' + s.last.b + '=' + sum + (parts.length ? ' \u2192 ' + parts.join(', ') : ' \u2192 nothing');
@@ -593,10 +738,29 @@
     return tot;
   }
 
+  function aiRobber(s, side) {
+    // block the opponent's most productive hex the robber does not already sit on
+    var q = 1 - side;
+    var best = null, bestScore = -1e9;
+    for (var h = 0; h < NH; h++) {
+      if (h === s.robber) continue;
+      var sc = 0, cs = HEX_CORNERS[h];
+      for (var k = 0; k < 6; k++) {
+        var vi = vMap[vkey(cs[k][0], cs[k][1])];
+        var o = s.sites[vi];
+        if (o && o.p === q) sc += pipValue(s, h) * (o.city ? 2 : 1);
+      }
+      sc += Math.random() * 1.5;
+      if (sc > bestScore) { bestScore = sc; best = { type: 'robber', h: h }; }
+    }
+    return best;
+  }
+
   function aiMove(s, side) {
     side = parseInt(side, 10);
     if (s.over !== null || s.turn !== side) return null;
     if (s.phase === 'setup') return aiSetup(s, side);
+    if (s.pending === 'robber') return aiRobber(s, side);
     var best = null, bestScore = -1e9;
     function consider(mv, score) { if (score > bestScore) { bestScore = score; best = mv; } }
 
@@ -628,7 +792,7 @@
         var rs = hexResSet(v);
         for (var li = 0; li < lacks.length; li++) if (rs[lacks[li]]) sc += 15; // diversify
         var newRes = 0; for (var nrk in rs) if (!prod[nrk]) newRes++;
-        sc += newRes * 25; // big bonus for adding resources the player does not produce
+        sc += newRes * 30; // big bonus for adding resources the player does not produce
         if (own < 4) sc += 20; else if (own < 6) sc += 10; // build out before upgrading
         consider({ type: 'settle', v: v }, sc);
       }
@@ -644,32 +808,51 @@
         }
       }
     }
-    // road: only in expansion mode (a settlement is affordable) and only toward a
-    // free, productive future settlement site — a stuck player saves/trades instead
-    if (canAfford(r, ROAD) && canAfford(r, SETTLE) && roadCount(s, side) < MAX_ROAD) {
+    // road: expansion toward a free, productive future settlement site. Deliberately
+    // NOT gated on settle affordability — reaching new hexes is the only way out of a
+    // resource drought, so a stuck player keeps building roads.
+    if (canAfford(r, ROAD) && roadCount(s, side) < MAX_ROAD) {
+      var lacksR = settleLacks(r);
       for (var e = 0; e < NE; e++) {
         if (!canBuildRoad(s, side, e, rc)) continue;
-        var a = EDGE[e][0], b = EDGE[e][1], cand = -1;
-        if (!rc[a] && vertexFree(s, a)) { var pa = hexPipsAt(s, a); if (pa >= 2) cand = pa; }
-        if (!rc[b] && vertexFree(s, b)) { var pb = hexPipsAt(s, b); if (pb >= 2 && pb > cand) cand = pb; }
-        if (cand < 0) continue; // leads nowhere buildable/productive
-        var rsc = 12 + cand * 2;
+        var a = EDGE[e][0], b = EDGE[e][1];
+        var cand = -1;
+        var ends = [a, b];
+        for (var ei = 0; ei < 2; ei++) {
+          var vv = ends[ei];
+          if (rc[vv] || !vertexFree(s, vv)) continue;
+          var rs2 = hexResSet(vv);
+          var d = 0;
+          for (var lk = 0; lk < lacksR.length; lk++) if (rs2[lacksR[lk]]) d++;
+          var nres = 0; for (var nrk2 in rs2) if (!prod[nrk2]) nres++;
+          var esc = hexPipsAt(s, vv) * 2 + d * 10 + nres * 15;
+          if (esc > cand) cand = esc;
+        }
+        if (cand < 2) continue; // leads nowhere buildable/productive
+        var rsc = 8 + cand;
         if (own >= 4 && roadCount(s, side) >= LONGEST_MIN - 1) rsc += 12; // chase the bonus once built out
         consider({ type: 'road', e: e }, rsc);
       }
     }
-    // dev
-    if (s.devDeck.length > 0 && canAfford(r, DEV)) consider({ type: 'dev' }, 15);
-    // play dev cards (useful ones)
-    if (s.dev[side][0] >= 1) consider({ type: 'play-knight' }, s.army[side] === ARMY_MIN - 1 ? 55 : 10);
-    if (s.dev[side][1] >= 1) {
-      for (var e2 = 0; e2 < NE; e2++) if (canBuildRoad(s, side, e2, rc)) consider({ type: 'play-road', e: e2 }, 25);
+    // dev: only on a clear surplus hand, so resources are saved toward a 4:1
+    // trade (the bootstrap out of a thin production profile) rather than spent
+    if (s.devDeck.length > 0 && canAfford(r, DEV)) {
+      var handTotal = r[0] + r[1] + r[2] + r[3] + r[4];
+      if (handTotal >= 8) consider({ type: 'dev' }, 10); // endgame-only: save resources toward settlements
     }
-    if (s.dev[side][2] >= 1) {
-      for (var rp = 0; rp < 5; rp++) consider({ type: 'play-plenty', r: rp }, 12 + (r[rp] < 2 ? 20 : 0));
-    }
-    if (s.dev[side][3] >= 1) {
-      for (var mm = 0; mm < 2; mm++) consider({ type: 'play-monopoly', r: mm }, s.res[1 - side][mm] >= 4 ? 40 : 8);
+    // play dev cards (at most one per turn, officially)
+    if (s.devUsed === null) {
+      if (s.dev[side][0] >= 1) consider({ type: 'play-knight' }, s.army[side] === ARMY_MIN - 1 ? 55 : 10);
+      if (s.dev[side][1] >= 1) {
+        for (var e2 = 0; e2 < NE; e2++) if (canBuildRoad(s, side, e2, rc)) consider({ type: 'play-road', e: e2 }, 25);
+      }
+      if (s.dev[side][2] >= 1) {
+        for (var rp = 0; rp < 5; rp++) if (s.bank[rp] >= 2) consider({ type: 'play-plenty', r: rp }, 12 + (r[rp] < 2 ? 20 : 0));
+      }
+      if (s.dev[side][3] >= 1) {
+        // Monopoly takes ALL of one resource from the bank: worth it when the bank is fat
+        for (var mm = 0; mm < 5; mm++) consider({ type: 'play-monopoly', r: mm }, s.bank[mm] >= 3 ? 40 : 8);
+      }
     }
     // 4:1 trade — relief from holding 8+, and (when no settle is affordable) a
     // strategic buy of a missing settlement resource to fund the next build.
@@ -679,9 +862,58 @@
       if (r[g] < 4) continue;
       for (var t = 0; t < 5; t++) {
         if (t === g) continue;
-        var tsc = 30;
-        if (!canSettleNow && lacks2.indexOf(t) >= 0) tsc = 28; // just under relief, still beats end
+        if (s.bank[t] < 1) continue;
+        var tsc = 25;
+        if (!canSettleNow && lacks2.indexOf(t) >= 0) tsc = 45; // convert surplus toward the missing build resource
         consider({ type: 'trade', give: g, get: t }, tsc);
+      }
+    }
+    // offer a player trade: a surplus card for a settlement resource I am missing
+    // (cooldown after a declined offer so the AI cannot loop offer/decline)
+    var cooling = s.tradeCooldown && s.tradeCooldown.p === side && s.seq - s.tradeCooldown.seq < 4;
+    if (!s.pendingTrade && !cooling) {
+      // Simulate the recipient's own acceptance test against their REAL hand so the
+      // offerer only proposes swaps the recipient will actually take (kills the
+      // offer/decline loop). The bot runs with full state, so this is safe.
+      var oppSide = 1 - side, orr = s.res[oppSide], oppLacks = settleLacks(orr);
+      var lacks3 = settleLacks(r);
+      for (var g3 = 0; g3 < 5; g3++) {
+        if (r[g3] < 2) continue; // offer only a card I can spare (keep one in hand)
+        for (var t3 = 0; t3 < 5; t3++) {
+          if (t3 === g3 || lacks3.indexOf(t3) < 0) continue; // only want a missing build res
+          // recipient's view: value of the card they receive, pain of what they pay
+          var gainVal2 = oppLacks.indexOf(g3) >= 0 ? 14 : (orr[g3] < 2 ? 8 : 0);
+          var costPain2 = orr[t3] < 2 ? 10 : (orr[t3] >= 4 ? -4 : 0);
+          if (gainVal2 - costPain2 < 6) continue; // they would decline -> don't bother
+          var give = [0, 0, 0, 0, 0], want = [0, 0, 0, 0, 0];
+          give[g3] = 1; want[t3] = 1;
+          var osc = 16 + (r[t3] < 1 ? 10 : 0) + Math.random() * 3;
+          consider({ type: 'trade-offer', give: give, want: want }, osc);
+        }
+      }
+    }
+    // answer a standing trade from the opponent
+    if (s.pendingTrade && s.pendingTrade.from !== side) {
+      var pt = s.pendingTrade;
+      var gainIdx = -1, costIdx = -1, net = 0;
+      for (var ni = 0; ni < 5; ni++) {
+        net += pt.give[ni] - pt.want[ni];
+        if (pt.give[ni] && gainIdx < 0) gainIdx = ni;
+        if (pt.want[ni] && costIdx < 0) costIdx = ni;
+      }
+      // value of what I receive
+      var gainVal = 0;
+      if (gainIdx >= 0) gainVal = lacks2.indexOf(gainIdx) >= 0 ? 14 : (r[gainIdx] < 2 ? 8 : 0);
+      // pain of what I must pay out
+      var costPain = 0;
+      if (costIdx >= 0) costPain = r[costIdx] < 2 ? 10 : (r[costIdx] >= 4 ? -4 : 0);
+      var ascr = net * 8 + gainVal - costPain;
+      if (!canAfford(r, pt.want)) {
+        consider({ type: 'trade-decline' }, 30);
+      } else if (ascr >= 6) {
+        consider({ type: 'trade-accept' }, ascr);
+      } else {
+        consider({ type: 'trade-decline' }, 24);
       }
     }
     // end
@@ -693,14 +925,37 @@
 
   function aiSetup(s, side) {
     var cands = legalMoves(s, side);
-    if (!cands.length) return { type: 'setup', v: 0 };
+    if (!cands.length) return null;
     var best = null, bestScore = -1e9;
     for (var i = 0; i < cands.length; i++) {
-      var v = cands[i].v;
-      var sc = hexPipsAt(s, v);
-      // prefer not adjacent to opponent (already guaranteed free), slight random tiebreak
+      var c = cands[i];
+      var sc;
+      if (c.type === 'setup') {
+        sc = hexPipsAt(s, c.v);
+        // prioritize a diverse production base: bonus per distinct resource this
+        // settlement adds (avoids the narrow 2-resource profile that deadlocks 2P)
+        function resAt(vv) { var set = {}, hs = VERTEX_HEXES[vv]; for (var ii = 0; ii < hs.length; ii++) { var t = TERRAIN_RES[s.terrain[hs[ii]]]; if (t >= 0) set[t] = true; } return set; }
+        var have = {};
+        for (var v0 = 0; v0 < NV; v0++) {
+          var o0 = s.sites[v0];
+          if (o0 && o0.p === side) { var ps0 = resAt(v0); for (var k0 in ps0) have[k0] = true; }
+        }
+        var rs0 = resAt(c.v), newKinds = 0;
+        for (var nk in rs0) if (!have[nk]) newKinds++;
+        sc += newKinds * 8; // strong diversity push to avoid narrow 2-resource deadlocks
+        // keep clear of the opponent's settlements
+        for (var v2 = 0; v2 < NV; v2++) {
+          var o = s.sites[v2];
+          if (o && o.p !== side && VADJ[c.v].indexOf(v2) >= 0) sc -= 4;
+        }
+      } else {
+        // setup road: score by the pips of the hexes the edge touches
+        var hs = EDGE_HEXES[c.e], tot = 0;
+        for (var hi = 0; hi < hs.length; hi++) tot += pipValue(s, hs[hi]);
+        sc = tot;
+      }
       sc += Math.random() * 2;
-      if (sc > bestScore) { bestScore = sc; best = cands[i]; }
+      if (sc > bestScore) { bestScore = sc; best = c; }
     }
     return best;
   }

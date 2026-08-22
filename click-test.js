@@ -347,12 +347,30 @@ function clickPoker() {
 
 function clickCatan() {
   const board = boardEl();
+  // 1. MANDATORY while a 7 (or a played knight) awaits: place the robber. It
+  //    is the ONLY legal move then, so it must outrank every other control.
+  const robHex = board.querySelectorAll('.cat-hex').find((e) => e.classList.contains('robber-can'));
+  if (robHex) { robHex.click(); return; }
+  // 2. Answer a standing player-to-player trade offer (we are the recipient):
+  //    accept when we can afford the want, else decline (decline is always legal).
+  const accept = board.querySelector('.cat-pto-accept');
+  if (accept && accept.classList.contains('can')) { accept.click(); return; }
+  const decline = board.querySelector('.cat-pto-decline');
+  if (decline && decline.classList.contains('can')) { decline.click(); return; }
+  // 3. Upgrade a settlement to a city (2 VP).
   const cityCan = board.querySelectorAll('.cat-site').find((e) => e.classList.contains('city-can'));
   if (cityCan) { cityCan.click(); return; }
+  // 4. Build a settlement/road (1 VP / expansion).
   const build = board.querySelectorAll('.cat-site.can')[0];
   if (build) { build.click(); return; }
+  // 5. Trade 4:1 with the bank.
   const trade = board.querySelectorAll('.cat-trade.can')[0];
   if (trade) { trade.click(); return; }
+  // 6. Build a road — the setup road step (S,S,R,R) requires it, and it
+  //    expands territory in play.
+  const edge = board.querySelectorAll('.cat-edge.can')[0];
+  if (edge) { edge.click(); return; }
+  // 7. End the turn.
   const end = board.querySelector('.cat-end');
   if (end) { end.click(); return; }
   throw new Error('catan: no actionable control rendered on my turn');
