@@ -41,6 +41,7 @@
   var LONGEST_MIN = 5;
   var ARMY_MIN = 3;
   var RES_CAP = 8;
+  var DISCARD_MAX = 7; // more than 7 cards in hand on a 7 => must discard down to half
   // 18 number tokens for the 18 non-desert hexes, weighted by 2d6 probability:
   // 2(1/36)x1, 3(2/36)x2, 4(3/36)x2, 5(4/36)x2, 6(5/36)x2, 8(5/36)x2, 9(4/36)x2,
   // 10(3/36)x2, 11(2/36)x2, 12(1/36)x1.
@@ -279,34 +280,40 @@
   /* ---------------- longest road (DFS, capped) ---------------- */
   function longestRoad(s, p) {
     if (roadCount(s, p) < LONGEST_MIN) return 0;
-    var best = 0;
-    var CAP = 200000;
-    var visits = 0;
+    // Longest simple path over ONLY p's own roads (no edge reused). Real Catan's
+    // longest road is a path of distinct connected roads; the prior version only
+    // blocked the immediately-previous edge, so a loop could reuse edges and inflate
+    // the count (wrongly awarding the 2-VP bonus or a win).
     var road = s.roads;
-    var startVerts = {};
-    for (var e = 0; e < NE; e++) if (road[e] === p) { startVerts[EDGE[e][0]] = true; startVerts[EDGE[e][1]] = true; }
-    var keys = Object.keys(startVerts);
-    for (var i = 0; i < keys.length; i++) {
-      if (visits > CAP) break;
-      var start = parseInt(keys[i], 10);
-      var stack = [[start, null, 0]]; // vertex, prevEdge, length
-      while (stack.length) {
-        if (++visits > CAP) break;
-        var fr = stack.pop();
-        var v = fr[0], pe = fr[1], len = fr[2];
-        if (len > best) best = len;
-        var adj = VADJ[v];
-        for (var a = 0; a < adj.length; a++) {
-          var w = adj[a];
-          // find edge index between v and w
-          var ei = -1;
-          for (var ee = 0; ee < NE; ee++) {
-            if (road[ee] === p && ((EDGE[ee][0] === v && EDGE[ee][1] === w) || (EDGE[ee][0] === w && EDGE[ee][1] === v))) { ei = ee; break; }
-          }
-          if (ei < 0 || ei === pe) continue;
-          stack.push([w, ei, len + 1]);
-        }
+    var adj = {};          // vertex -> list of [to, edgeIndex]
+    var starts = [];
+    for (var e = 0; e < NE; e++) if (road[e] === p) {
+      var a = EDGE[e][0], b = EDGE[e][1];
+      (adj[a] || (adj[a] = [])).push([b, e]);
+      (adj[b] || (adj[b] = [])).push([a, e]);
+      if (starts.indexOf(a) < 0) starts.push(a);
+      if (starts.indexOf(b) < 0) starts.push(b);
+    }
+    var best = 0;
+    var used = {};         // edges on the active path (backtracked, so clean between roots)
+    var visits = 0;
+    var CAP = 200000;
+    function dfs(v, len) {
+      if (visits++ > CAP) return;
+      if (len > best) best = len;
+      var list = adj[v];
+      if (!list) return;
+      for (var i = 0; i < list.length; i++) {
+        var ei = list[i][1];
+        if (used[ei]) continue;      // never reuse an edge -> true longest simple path
+        used[ei] = true;
+        dfs(list[i][0], len + 1);
+        used[ei] = false;
       }
+    }
+    for (var s2 = 0; s2 < starts.length; s2++) {
+      if (visits > CAP) break;
+      dfs(starts[s2], 0);
     }
     return best;
   }
@@ -411,7 +418,7 @@
 
   function discardHalf(s, p) {
     var total = sumOf(s.res[p]);
-    if (total <= RES_CAP) return;
+    if (total <= DISCARD_MAX) return;
     var toDiscard = Math.floor(total / 2);
     while (toDiscard > 0) {
       var pool = [];
